@@ -1,36 +1,16 @@
-apply plugin: 'com.android.application'
+apply plugin: 'com.android.library'
 
 android {
     namespace = 'org.strongswan.android'
 
     defaultConfig {
-        applicationId "org.strongswan.android"
         compileSdk = 36
         minSdkVersion 21
         targetSdkVersion 36
-
-        versionCode 96
-        versionName "2.6.2"
-
-        externalNativeBuild {
-            ndkBuild {
-                arguments '-j' + Runtime.runtime.availableProcessors()
-            }
-        }
+        // No applicationId in library module
     }
 
-    ndkVersion = "27.3.13750724"
-
-    externalNativeBuild {
-        ndkBuild {
-            path 'src/main/jni/Android.mk'
-        }
-    }
-
-    tasks.withType(JavaCompile).configureEach {
-        compileTask ->
-            options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
-    }
+    // Remove NDK/externalNativeBuild; host app provides native libs via jniLibs
 
     buildTypes {
         release {
