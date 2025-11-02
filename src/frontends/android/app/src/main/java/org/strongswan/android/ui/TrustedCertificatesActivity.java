@@ -114,18 +114,22 @@ public class TrustedCertificatesActivity extends AppCompatActivity implements Tr
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item)
 	{
-		switch (item.getItemId())
+		int id = item.getItemId();
+		if (id == android.R.id.home)
 		{
-			case android.R.id.home:
-				finish();
-				return true;
-			case R.id.menu_reload_certs:
-				reloadCertificates();
-				return true;
-			case R.id.menu_import_certificate:
-				Intent intent = new Intent(this, TrustedCertificateImportActivity.class);
-				mImportCertificate.launch(intent);
-				return true;
+			finish();
+			return true;
+		}
+		else if (id == R.id.menu_reload_certs)
+		{
+			reloadCertificates();
+			return true;
+		}
+		else if (id == R.id.menu_import_certificate)
+		{
+			Intent intent = new Intent(this, TrustedCertificateImportActivity.class);
+			mImportCertificate.launch(intent);
+			return true;
 		}
 		return super.onOptionsItemSelected(item);
 	}

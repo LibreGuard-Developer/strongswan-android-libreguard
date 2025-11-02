@@ -22,6 +22,7 @@ import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
+import android.text.TextUtils;
 
 import org.strongswan.android.logic.StrongSwanApplication;
 
@@ -35,10 +36,6 @@ public class VpnProfileSqlDataSource implements VpnProfileDataSource
 
 	private SQLiteDatabase mDatabase;
 
-	/**
-	 * Construct a new VPN profile data source. The context is used to
-	 * open/create the database.
-	 */
 	public VpnProfileSqlDataSource()
 	{
 		mDbHelper = StrongSwanApplication.getInstance().getDatabaseHelper();
@@ -50,8 +47,53 @@ public class VpnProfileSqlDataSource implements VpnProfileDataSource
 		if (mDatabase == null)
 		{
 			mDatabase = mDbHelper.getWritableDatabase();
+			// Perform lightweight runtime migration for legacy schema without _uuid
+			migrateUuidColumnIfNeeded(mDatabase);
 		}
 		return this;
+	}
+
+	private void migrateUuidColumnIfNeeded(SQLiteDatabase db)
+	{
+		Cursor c = null;
+		try
+		{
+			c = db.rawQuery("PRAGMA table_info(" + DatabaseHelper.TABLE_VPN_PROFILE.Name + ")", null);
+			boolean hasUnderscoreUuid = false;
+			boolean hasLegacyUuid = false;
+			while (c.moveToNext())
+			{
+				String name = c.getString(c.getColumnIndexOrThrow("name"));
+				if (VpnProfileDataSource.KEY_UUID.equals(name))
+				{
+					hasUnderscoreUuid = true;
+				}
+				if ("uuid".equals(name))
+				{
+					hasLegacyUuid = true;
+				}
+			}
+			if (!hasUnderscoreUuid)
+			{
+				// Add _uuid column and backfill from legacy column if present
+				db.execSQL("ALTER TABLE " + DatabaseHelper.TABLE_VPN_PROFILE.Name + " ADD COLUMN " + VpnProfileDataSource.KEY_UUID + " TEXT;");
+				if (hasLegacyUuid)
+				{
+					db.execSQL("UPDATE " + DatabaseHelper.TABLE_VPN_PROFILE.Name + " SET " + VpnProfileDataSource.KEY_UUID + " = uuid WHERE " + VpnProfileDataSource.KEY_UUID + " IS NULL;");
+				}
+			}
+		}
+		catch (Exception ignored)
+		{
+			// Best-effort migration; if PRAGMA fails we keep going and let normal code handle errors
+		}
+		finally
+		{
+			if (c != null)
+			{
+				c.close();
+			}
+		}
 	}
 
 	@Override
@@ -126,10 +168,26 @@ public class VpnProfileSqlDataSource implements VpnProfileDataSource
 		return vpnProfiles;
 	}
 
+	private static int getColumnIndexCompat(Cursor cursor, String primary, String legacy)
+	{
+		int idx = cursor.getColumnIndex(primary);
+		if (idx >= 0)
+		{
+			return idx;
+		}
+		return cursor.getColumnIndex(legacy);
+	}
+
 	private VpnProfile VpnProfileFromCursor(Cursor cursor)
 	{
 		VpnProfile profile = new VpnProfile();
-		profile.setUUID(UUID.fromString(cursor.getString(cursor.getColumnIndexOrThrow(KEY_UUID))));
+		int uuidIdx = getColumnIndexCompat(cursor, KEY_UUID, "uuid");
+		String uuidStr = uuidIdx >= 0 ? cursor.getString(uuidIdx) : null;
+		if (TextUtils.isEmpty(uuidStr))
+		{
+			uuidStr = UUID.randomUUID().toString();
+		}
+		profile.setUUID(UUID.fromString(uuidStr));
 		profile.setName(cursor.getString(cursor.getColumnIndexOrThrow(KEY_NAME)));
 		profile.setGateway(cursor.getString(cursor.getColumnIndexOrThrow(KEY_GATEWAY)));
 		profile.setVpnType(VpnType.fromIdentifier(cursor.getString(cursor.getColumnIndexOrThrow(KEY_VPN_TYPE))));

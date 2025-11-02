@@ -4,13 +4,11 @@ android {
     namespace = 'org.strongswan.android'
 
     defaultConfig {
-        compileSdk = 36
+        compileSdk = 35
         minSdkVersion 21
-        targetSdkVersion 36
+        targetSdkVersion 35
         // No applicationId in library module
     }
-
-    // Remove NDK/externalNativeBuild; host app provides native libs via jniLibs
 
     buildTypes {
         release {

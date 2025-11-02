@@ -83,6 +83,10 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import androidx.preference.PreferenceManager;
 
+// ADD: imports for local certificate handling
+import org.strongswan.android.security.LocalCertificateKeyStoreManager;
+import org.strongswan.android.security.LocalCertificateStore;
+
 public class CharonVpnService extends VpnService implements Runnable, VpnStateService.VpnStateListener
 {
 	private static final String TAG = CharonVpnService.class.getSimpleName();
@@ -100,6 +104,8 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 	private VpnProfile mCurrentProfile;
 	private volatile String mCurrentCertificateAlias;
 	private volatile String mCurrentUserCertificateAlias;
+	// ADD: Local certificate manager instance
+	private LocalCertificateKeyStoreManager mLocalCertManager;
 	private VpnProfile mNextProfile;
 	private volatile boolean mProfileUpdated;
 	private volatile boolean mTerminate;
@@ -199,6 +205,13 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 
 		/* handler used to do changes in the main UI thread */
 		mHandler = new Handler(getMainLooper());
+
+		// ADD: initialize local certificate manager
+		try {
+			mLocalCertManager = new LocalCertificateKeyStoreManager(getApplicationContext());
+		} catch (Throwable t) {
+			Log.w(TAG, "Failed to initialize LocalCertificateKeyStoreManager: " + t.getMessage());
+		}
 
 		mDataSource = new VpnProfileSource(this);
 		mDataSource.open();
@@ -311,7 +324,7 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 							writer.setValue("global.mtu", mCurrentProfile.getMTU());
 							writer.setValue("global.nat_keepalive", mCurrentProfile.getNATKeepAlive());
 							writer.setValue("global.rsa_pss", (mCurrentProfile.getFlags() & VpnProfile.FLAGS_RSA_PSS) != 0);
-							writer.setValue("global.crl", (mCurrentProfile.getFlags() & VpnProfile.FLAGS_DISABLE_CRL) == 0);
+							writer.setValue("global.crl", (mCurrentProfile.getFlags() & VpnProfile.FLAGS_DISABLE_CRL) != 0);
 							writer.setValue("global.ocsp", (mCurrentProfile.getFlags() & VpnProfile.FLAGS_DISABLE_OCSP) == 0);
 							writer.setValue("connection.type", mCurrentProfile.getVpnType().getIdentifier());
 							writer.setValue("connection.server", mCurrentProfile.getGateway());
@@ -772,6 +785,25 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 	 */
 	private byte[][] getUserCertificate() throws KeyChainException, InterruptedException, CertificateEncodingException
 	{
+		// ADD: Support app-local certificate aliases ("local:")
+		try {
+			String alias = mCurrentUserCertificateAlias;
+			if (alias != null && alias.startsWith("local:")) {
+				LocalCertificateStore localStore = new LocalCertificateStore();
+				X509Certificate user = localStore.getCertificate(alias);
+				if (user == null) {
+					Log.e(TAG, "Local user certificate not found for alias: " + alias);
+					return null;
+				}
+				ArrayList<byte[]> enc = new ArrayList<>();
+				enc.add(user.getEncoded());
+				return enc.toArray(new byte[enc.size()][]);
+			}
+		} catch (Exception e) {
+			Log.e(TAG, "Failed to load local user certificate: " + e.getMessage());
+			return null;
+		}
+
 		ArrayList<byte[]> encodings = new ArrayList<byte[]>();
 		X509Certificate[] chain = KeyChain.getCertificateChain(getApplicationContext(), mCurrentUserCertificateAlias);
 		if (chain == null || chain.length == 0)
@@ -797,6 +829,20 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 	 */
 	private PrivateKey getUserKey() throws KeyChainException, InterruptedException
 	{
+		// ADD: Support app-local private key retrieval
+		try {
+			String alias = mCurrentUserCertificateAlias;
+			if (alias != null && alias.startsWith("local:") && mLocalCertManager != null) {
+				PrivateKey key = mLocalCertManager.getPrivateKey(alias);
+				if (key == null) {
+					Log.e(TAG, "Local private key not found for alias: " + alias);
+				}
+				return key;
+			}
+		} catch (Exception e) {
+			Log.e(TAG, "Failed to load local private key: " + e.getMessage());
+			return null;
+		}
 		return KeyChain.getPrivateKey(getApplicationContext(), mCurrentUserCertificateAlias);
 	}
 
