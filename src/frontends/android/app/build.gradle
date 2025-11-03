@@ -3,11 +3,21 @@ apply plugin: 'com.android.library'
 android {
     namespace = 'org.strongswan.android'
 
+    // Option A (default): use prebuilt JNI libs from src/main/jniLibs
+    // To enable native build, invoke Gradle with -PstrongswanNativeBuild=true
+    def enableNativeBuild = project.hasProperty('strongswanNativeBuild') && project.property('strongswanNativeBuild') == 'true'
+    def hasOpenSSL = file("${projectDir}/src/main/jni/openssl/include").exists()
+    def hasPrebuiltLibs = file("${projectDir}/src/main/jniLibs/arm64-v8a/libcharon.so").exists()
+
     defaultConfig {
         compileSdk = 35
         minSdkVersion 21
         targetSdkVersion 35
-        // No applicationId in library module
+        if (enableNativeBuild && hasOpenSSL) {
+            ndk {
+                abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
+            }
+        }
     }
 
     buildTypes {
@@ -16,9 +26,40 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
         }
     }
+
     compileOptions {
         targetCompatibility 1.8
         sourceCompatibility 1.8
+    }
+
+    sourceSets {
+        main {
+            // Always ensure jniLibs are packaged, whether built or prebuilt
+            // ndk-build may output to src/main/jni/libs by default; Gradle expects src/main/jniLibs
+            jniLibs.srcDirs("src/main/jniLibs", "src/main/jni/libs")
+            // Only fall back to legacy backup libs if we have no prebuilt libs and native build is disabled
+            if (!enableNativeBuild && !hasPrebuiltLibs) {
+                jniLibs.srcDirs += ["${rootDir}/strongswan_backup/libs"]
+            }
+        }
+    }
+
+    if (enableNativeBuild && hasOpenSSL) {
+        externalNativeBuild {
+            ndkBuild {
+                path file('src/main/jni/Android.mk')
+            }
+        }
+    } else {
+        // Do not configure externalNativeBuild tasks when not building natively
+    }
+}
+
+// Additional guard: after project is evaluated, disable any externalNativeBuild tasks unless explicitly enabled
+afterEvaluate {
+    def enableNativeBuild = project.hasProperty('strongswanNativeBuild') && project.property('strongswanNativeBuild') == 'true'
+    if (!enableNativeBuild) {
+        tasks.matching { it.name.startsWith('externalNativeBuild') || it.name.contains('Cxx') }.configureEach { it.enabled = false }
     }
 }
 
