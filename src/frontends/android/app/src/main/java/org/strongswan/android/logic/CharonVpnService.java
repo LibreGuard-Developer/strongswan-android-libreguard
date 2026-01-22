@@ -451,6 +451,22 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 		}
 	}
 
+	/**
+	 * Safely resolve a color resource, falling back to the primary color if the resource is missing
+	 * or invalid. This prevents notification building from crashing and dropping the status bar icon.
+	 */
+	private int safeGetColor(int colorResId)
+	{
+		try
+		{
+			return ContextCompat.getColor(this, colorResId);
+		}
+		catch (Exception e)
+		{
+			Log.w(TAG, "Failed to resolve color resource " + colorResId + ", falling back to primary_dark", e);
+			return ContextCompat.getColor(this, R.color.primary_dark);
+		}
+	}
 
 	/**
 	 * Build a notification matching the current state
@@ -477,7 +493,7 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 		{
 			s = mService.getErrorText();
 			builder.setSmallIcon(R.drawable.ic_notification_warning);
-			builder.setColor(ContextCompat.getColor(this, R.color.error_text));
+			builder.setColor(safeGetColor(R.color.error_text));
 
 			if (!publicVersion && profile != null)
 			{
@@ -512,12 +528,12 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 				case CONNECTING:
 					s = R.string.state_connecting;
 					builder.setSmallIcon(R.drawable.ic_notification_connecting);
-					builder.setColor(ContextCompat.getColor(this, R.color.warning_text));
+					builder.setColor(safeGetColor(R.color.warning_text));
 					add_action = true;
 					break;
 				case CONNECTED:
 					s = R.string.state_connected;
-					builder.setColor(ContextCompat.getColor(this, R.color.success_text));
+					builder.setColor(safeGetColor(R.color.success_text));
 					builder.setUsesChronometer(true);
 					add_action = true;
 					break;

@@ -593,7 +593,9 @@ public class VpnStateService extends Service
 			switch (error)
 			{
 				case AUTH_FAILED:
-					return 10000;
+					// CRITICAL FIX: Don't retry on AUTH_FAILED (certificate revocation/traffic limit)
+					// This prevents infinite reconnection loop when backend revokes the certificate
+					return 0; // Was: 10000 (10 seconds)
 				case PEER_AUTH_FAILED:
 					return 5000;
 				case LOOKUP_FAILED:
