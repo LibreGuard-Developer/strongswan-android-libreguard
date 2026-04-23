@@ -10,7 +10,7 @@ android {
     def hasPrebuiltLibs = file("${projectDir}/src/main/jniLibs/arm64-v8a/libcharon.so").exists()
 
     defaultConfig {
-        compileSdk = 35
+        compileSdk = 36
         minSdkVersion 21
         targetSdkVersion 35
         if (enableNativeBuild && hasOpenSSL) {
