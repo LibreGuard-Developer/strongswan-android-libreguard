@@ -16,7 +16,6 @@
 
 package org.strongswan.android.utils;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.security.Key;
 import java.security.KeyStore;
@@ -32,20 +31,38 @@ import java.util.Enumeration;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import org.strongswan.android.security.Pkcs12KeyStoreLoader;
+
 public class KeyPairs
 {
-	private static final String KEYSTORE_INSTANCE = "PKCS12";
-
 	@NonNull
 	private static KeyStore toKeyStore(@NonNull byte[] bytes, @NonNull char[] password)
 		throws IOException, KeyStoreException, CertificateException, NoSuchAlgorithmException
 	{
-		try (final ByteArrayInputStream stream = new ByteArrayInputStream(bytes))
+		final Pkcs12KeyStoreLoader.LoadResult result = Pkcs12KeyStoreLoader.load(bytes, password);
+		if (result.isSuccess() && result.getKeyStore() != null)
 		{
-			final KeyStore keyStore = KeyStore.getInstance(KEYSTORE_INSTANCE);
-			keyStore.load(stream, password);
-			return keyStore;
+			return result.getKeyStore();
 		}
+
+		final Exception exception = result.getException();
+		if (exception instanceof IOException)
+		{
+			throw (IOException)exception;
+		}
+		if (exception instanceof KeyStoreException)
+		{
+			throw (KeyStoreException)exception;
+		}
+		if (exception instanceof CertificateException)
+		{
+			throw (CertificateException)exception;
+		}
+		if (exception instanceof NoSuchAlgorithmException)
+		{
+			throw (NoSuchAlgorithmException)exception;
+		}
+		throw new IOException(result.getFailureReason() != null ? result.getFailureReason() : "Unable to load PKCS#12 keystore", exception);
 	}
 
 	@Nullable
