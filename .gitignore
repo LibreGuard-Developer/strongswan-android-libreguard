@@ -56,3 +56,7 @@ coverage/
 test-driver
 nbproject/
 *.[si]
+
+# Local diagnostic artifacts
+/gcm-diagnose.log
+
