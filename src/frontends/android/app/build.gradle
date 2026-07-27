@@ -12,7 +12,6 @@ android {
     defaultConfig {
         compileSdk = 36
         minSdkVersion 21
-        targetSdkVersion 35
         if (enableNativeBuild && hasOpenSSL) {
             ndk {
                 abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
@@ -23,7 +22,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.txt'
         }
     }
 
@@ -42,6 +41,12 @@ android {
                 jniLibs.srcDirs += ["${rootDir}/strongswan_backup/libs"]
             }
         }
+    }
+    lint {
+        targetSdk 35
+    }
+    testOptions {
+        targetSdk 35
     }
 
     if (enableNativeBuild && hasOpenSSL) {
