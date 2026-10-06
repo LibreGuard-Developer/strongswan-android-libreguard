@@ -165,6 +165,7 @@ ENUM(xfrm_msg_names, XFRM_MSG_NEWSA, __XFRM_MSG_MAX,
 	"XFRM_MSG_MAPPING",
 	"XFRM_MSG_SETDEFAULT",
 	"XFRM_MSG_GETDEFAULT",
+	"XFRM_MSG_MIGRATE_STATE",
 	"XFRM_MSG_MAX",
 );
 
@@ -371,9 +372,19 @@ struct private_kernel_netlink_ipsec_t {
 	bool sa_lastused;
 
 	/**
+	 * Whether the kernel accepts XFRM_STATE_AF_UNSPEC for transport mode
+	 */
+	bool sa_unspec_transport;
+
+	/**
 	 * Whether the kernel supports setting the SA direction
 	 */
 	bool sa_dir;
+
+	/**
+	 * Whether the kernel supports migrating SAs
+	 */
+	bool sa_migrate;
 
 	/**
 	 * Whether to install routes along policies
@@ -470,7 +481,7 @@ static u_int ipsec_sa_hash(ipsec_sa_t *sa)
 						  chunk_hash_inc(chunk_from_thing(sa->mark),
 						  chunk_hash_inc(chunk_from_thing(sa->if_id),
 						  chunk_hash_inc(chunk_from_thing(sa->hw_offload),
-						  chunk_hash(chunk_from_thing(sa->cfg)))))));
+						  ipsec_sa_cfg_hash(&sa->cfg))))));
 }
 
 /**
@@ -554,6 +565,9 @@ struct policy_sa_t {
 	/** Whether to trigger per-CPU acquires for this policy */
 	bool pcpu_acquires;
 
+	/** Whether to forward certain ICMP error messages for this policy */
+	bool forward_icmp;
+
 	/** Assigned SA */
 	ipsec_sa_t *sa;
 };
@@ -577,19 +591,16 @@ struct policy_sa_out_t {
  * Create a policy_sa(_out)_t object
  */
 static policy_sa_t *policy_sa_create(private_kernel_netlink_ipsec_t *this,
-	policy_dir_t dir, policy_type_t type, host_t *src, host_t *dst,
-	traffic_selector_t *src_ts, traffic_selector_t *dst_ts, mark_t mark,
-	uint32_t if_id, hw_offload_t hw_offload, bool pcpu_acquires,
-	ipsec_sa_cfg_t *cfg)
+	kernel_ipsec_policy_id_t *id, kernel_ipsec_manage_policy_t *data)
 {
 	policy_sa_t *policy;
 
-	if (dir == POLICY_OUT)
+	if (id->dir == POLICY_OUT)
 	{
 		policy_sa_out_t *out;
 		INIT(out,
-			.src_ts = src_ts->clone(src_ts),
-			.dst_ts = dst_ts->clone(dst_ts),
+			.src_ts = id->src_ts->clone(id->src_ts),
+			.dst_ts = id->dst_ts->clone(id->dst_ts),
 		);
 		policy = &out->generic;
 	}
@@ -597,9 +608,11 @@ static policy_sa_t *policy_sa_create(private_kernel_netlink_ipsec_t *this,
 	{
 		INIT(policy, .priority = 0);
 	}
-	policy->type = type;
-	policy->pcpu_acquires = pcpu_acquires;
-	policy->sa = ipsec_sa_create(this, src, dst, mark, if_id, hw_offload, cfg);
+	policy->type = data->type;
+	policy->pcpu_acquires = data->pcpu_acquires;
+	policy->forward_icmp = data->forward_icmp;
+	policy->sa = ipsec_sa_create(this, data->src, data->dst, id->mark,
+								 id->if_id, data->hw_offload, data->sa);
 	return policy;
 }
 
@@ -1209,6 +1222,9 @@ CALLBACK(receive_events, void,
 		case XFRM_MSG_MAPPING:
 			process_mapping(this, hdr);
 			break;
+		case XFRM_MSG_MIGRATE_STATE:
+			/* ignore these events we receive for our own SA updates */
+			break;
 		default:
 			DBG1(DBG_KNL, "received unknown event from XFRM event "
 				 "socket: %d", hdr->nlmsg_type);
@@ -1677,22 +1693,20 @@ out:
 }
 
 /**
- * Add a HW offload attribute to the given SA-related message.
+ * Add a HW offload attribute for the given local address to the given
+ * SA-related message.
  */
-static bool add_hw_offload_sa(struct nlmsghdr *hdr, int buflen,
-							  kernel_ipsec_sa_id_t *id,
-							  kernel_ipsec_add_sa_t *data,
+static bool add_hw_offload_sa(struct nlmsghdr *hdr, int buflen, host_t *local,
+							  bool inbound, hw_offload_t hw_offload,
 							  struct xfrm_user_offload **offload)
 {
-	host_t *local = data->inbound ? id->dst : id->src;
-
-	if (!add_hw_offload(hdr, buflen, local, NULL, data->hw_offload, offload))
+	if (!add_hw_offload(hdr, buflen, local, NULL, hw_offload, offload))
 	{
 		return FALSE;
 	}
 	else if (*offload)
 	{
-		(*offload)->flags |= data->inbound ? XFRM_OFFLOAD_INBOUND : 0;
+		(*offload)->flags |= inbound ? XFRM_OFFLOAD_INBOUND : 0;
 	}
 	return TRUE;
 }
@@ -1807,6 +1821,11 @@ METHOD(kernel_ipsec_t, add_sa, status_t,
 		sa->flags |= XFRM_STATE_NOECN;
 	}
 
+	if (data->inbound && data->forward_icmp)
+	{
+		sa->flags |= XFRM_STATE_ICMP;
+	}
+
 	if (data->inbound)
 	{
 		switch (data->copy_dscp)
@@ -1854,6 +1873,10 @@ METHOD(kernel_ipsec_t, add_sa, status_t,
 			if (original_mode == MODE_TUNNEL)
 			{	/* don't install selectors for switched SAs.  because only one
 				 * selector can be installed other traffic would get dropped */
+				if (this->sa_unspec_transport)
+				{
+					sa->flags |= XFRM_STATE_AF_UNSPEC;
+				}
 				break;
 			}
 			if (data->src_ts->get_first(data->src_ts,
@@ -2240,7 +2263,9 @@ METHOD(kernel_ipsec_t, add_sa, status_t,
 		}
 
 		DBG2(DBG_KNL, "  HW offload: %N", hw_offload_names, data->hw_offload);
-		if (!add_hw_offload_sa(hdr, sizeof(request), id, data, &offload))
+		if (!add_hw_offload_sa(hdr, sizeof(request),
+							   data->inbound ? id->dst : id->src, data->inbound,
+							   data->hw_offload, &offload))
 		{
 			DBG1(DBG_KNL, "failed to configure HW offload");
 			goto failed;
@@ -2569,6 +2594,180 @@ METHOD(kernel_ipsec_t, del_sa, status_t,
 	}
 }
 
+/**
+ * Migrate an SA if supported by the kernel.
+ */
+static status_t migrate_sa(private_kernel_netlink_ipsec_t *this,
+						   kernel_ipsec_sa_id_t *id,
+						   kernel_ipsec_update_sa_t *data)
+{
+	netlink_buf_t request;
+	struct nlmsghdr *hdr;
+	struct xfrm_user_migrate_state *migrate;
+	struct xfrm_encap_tmpl *encap;
+	struct xfrm_user_offload *offload = NULL;
+	ipsec_mode_t mode = data->mode, original_mode = data->mode;
+	traffic_selector_t *first_src_ts, *first_dst_ts;
+	status_t status = FAILED;
+	char markstr[32] = "";
+
+	/* if IPComp is used, we first migrate the IPComp SA */
+	if (data->cpi)
+	{
+		kernel_ipsec_sa_id_t ipcomp_id = {
+			.src = id->src,
+			.dst = id->dst,
+			.spi = htonl(ntohs(data->cpi)),
+			.proto = IPPROTO_COMP,
+			.mark = id->mark,
+			.if_id = id->if_id,
+		};
+		kernel_ipsec_update_sa_t ipcomp = {
+			.mode = data->mode,
+			.new_src = data->new_src,
+			.new_dst = data->new_dst,
+			.new_reqid = data->new_reqid,
+			.src_ts = data->src_ts,
+			.dst_ts = data->dst_ts,
+		};
+		migrate_sa(this, &ipcomp_id, &ipcomp);
+		mode = MODE_TRANSPORT;
+	}
+
+	memset(&request, 0, sizeof(request));
+	format_mark(markstr, sizeof(markstr), id->mark);
+
+	DBG2(DBG_KNL, "migrating SAD entry with SPI %.8x%s from %#H..%#H to "
+		 "%#H..%#H", ntohl(id->spi), markstr, id->src, id->dst, data->new_src,
+		 data->new_dst);
+
+	hdr = &request.hdr;
+	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	hdr->nlmsg_type = XFRM_MSG_MIGRATE_STATE;
+	hdr->nlmsg_len = NLMSG_LENGTH(sizeof(struct xfrm_user_migrate_state));
+
+	migrate = NLMSG_DATA(hdr);
+	host2xfrm(id->dst, &migrate->id.daddr);
+	migrate->id.spi = id->spi;
+	migrate->id.proto = id->proto;
+	migrate->id.family = id->dst->get_family(id->dst);
+	migrate->old_mark.v = id->mark.value;
+	migrate->old_mark.m = id->mark.mask;
+
+	host2xfrm(data->new_src, &migrate->new_saddr);
+	host2xfrm(data->new_dst, &migrate->new_daddr);
+	migrate->new_reqid = data->new_reqid;
+	migrate->new_family = data->new_dst->get_family(data->new_dst);
+
+	/* set selector using the same condition as in add_sa() */
+	if ((mode == MODE_TRANSPORT || mode == MODE_BEET) &&
+		original_mode != MODE_TUNNEL)
+	{
+		if (data->src_ts->get_first(data->src_ts,
+									(void**)&first_src_ts) == SUCCESS &&
+			data->dst_ts->get_first(data->dst_ts,
+									(void**)&first_dst_ts) == SUCCESS)
+		{
+			migrate->new_sel = ts2selector(first_src_ts, first_dst_ts,
+										   data->interface);
+			if (!this->proto_port_transport)
+			{
+				migrate->new_sel.proto = 0;
+				migrate->new_sel.dport = migrate->new_sel.dport_mask = 0;
+				migrate->new_sel.sport = migrate->new_sel.sport_mask = 0;
+			}
+		}
+	}
+
+	if (data->new_encap)
+	{	/* enable/update encap */
+		encap = netlink_reserve(hdr, sizeof(request), XFRMA_ENCAP,
+								sizeof(*encap));
+		if (!encap)
+		{
+			goto failed;
+		}
+		encap->encap_type = UDP_ENCAP_ESPINUDP;
+		encap->encap_sport = htons(data->new_src->get_port(data->new_src));
+		encap->encap_dport = htons(data->new_dst->get_port(data->new_dst));
+		memset(&encap->encap_oa, 0, sizeof (xfrm_address_t));
+	}
+	else if (data->encap)
+	{	/* disable encap with an empty attribute (encap_type = 0) */
+		encap = netlink_reserve(hdr, sizeof(request), XFRMA_ENCAP,
+								sizeof(*encap));
+		if (!encap)
+		{
+			goto failed;
+		}
+	}
+
+	if (id->proto != IPPROTO_COMP)
+	{
+		if (!add_hw_offload_sa(hdr, sizeof(request),
+							   data->inbound ? data->new_dst : data->new_src,
+							   data->inbound, data->hw_offload, &offload))
+		{
+			DBG1(DBG_KNL, "failed to configure HW offload during migration");
+			goto failed;
+		}
+		/* clear potentially stale offload state when e.g. switching to an
+		 * interface that doesn't support offloading */
+		if (!offload)
+		{
+			migrate->flags |= XFRM_MIGRATE_STATE_CLEAR_OFFLOAD;
+		}
+	}
+
+	status = this->socket_xfrm->send_ack(this->socket_xfrm, hdr);
+
+	if (status != SUCCESS && offload && data->hw_offload == HW_OFFLOAD_AUTO)
+	{
+		DBG1(DBG_KNL, "failed to migrate SA with %N HW offload, trying with "
+			 "%N HW offload", hw_offload_names, HW_OFFLOAD_PACKET,
+			 hw_offload_names, HW_OFFLOAD_CRYPTO);
+		offload->flags &= ~XFRM_OFFLOAD_PACKET;
+		status = this->socket_xfrm->send_ack(this->socket_xfrm, hdr);
+	}
+
+	if (status != SUCCESS)
+	{
+		DBG1(DBG_KNL, "unable to migrate SAD entry with SPI %.8x%s",
+			 ntohl(id->spi), markstr);
+		status = FAILED;
+		goto failed;
+	}
+
+	status = SUCCESS;
+
+failed:
+	return status;
+}
+
+/**
+ * Check if the kernel's lockdown feature is set to "confidentiality", which
+ * means it won't allow userland to access confidential information like IPsec
+ * keys.
+ */
+static bool lockdown_confidentiality()
+{
+	char buf[BUF_LEN];
+	FILE *f;
+	bool locked = FALSE;
+
+	f = fopen("/sys/kernel/security/lockdown", "r");
+	if (f)
+	{
+		if (fgets(buf, sizeof(buf), f) &&
+			strstr(buf, "[confidentiality]"))
+		{
+			locked = TRUE;
+		}
+		fclose(f);
+	}
+	return locked;
+}
+
 METHOD(kernel_ipsec_t, update_sa, status_t,
 	private_kernel_netlink_ipsec_t *this, kernel_ipsec_sa_id_t *id,
 	kernel_ipsec_update_sa_t *data)
@@ -2589,6 +2788,21 @@ METHOD(kernel_ipsec_t, update_sa, status_t,
 	status_t status = FAILED;
 	traffic_selector_t *ts;
 	char markstr[32] = "";
+
+	/* fallback to the old approach if this fails (e.g. because the kernel
+	 * is compiled without the feature) */
+	if (id->proto != IPPROTO_COMP && this->sa_migrate &&
+		migrate_sa(this, id, data) == SUCCESS)
+	{
+		return SUCCESS;
+	}
+
+	if (lockdown_confidentiality())
+	{
+		DBG1(DBG_KNL, "unable to update SAD entry with SPI %.8x due to "
+			 "kernel lockdown, triggering a rekeying", ntohl(id->spi));
+		return NOT_SUPPORTED;
+	}
 
 	/* if IPComp is used, we first update the IPComp SA */
 	if (data->cpi)
@@ -2690,10 +2904,7 @@ METHOD(kernel_ipsec_t, update_sa, status_t,
 	sa = NLMSG_DATA(hdr);
 	memcpy(sa, NLMSG_DATA(out_hdr), sizeof(struct xfrm_usersa_info));
 	sa->family = data->new_dst->get_family(data->new_dst);
-	if (data->new_reqid)
-	{
-		sa->reqid = data->new_reqid;
-	}
+	sa->reqid = data->new_reqid;
 
 	if (!id->src->ip_equals(id->src, data->new_src))
 	{
@@ -2716,6 +2927,9 @@ METHOD(kernel_ipsec_t, update_sa, status_t,
 		{
 			ts->set_address(ts, data->new_dst);
 			ts2subnet(ts, &sa->sel.daddr, &sa->sel.prefixlen_d);
+			/* can't set this for src, otherwise selector2ts() will fail, but
+			 * if the family changes, both addresses need updating anyway */
+			sa->sel.family = data->new_dst->get_family(data->new_dst);
 		}
 		DESTROY_IF(ts);
 	}
@@ -2730,8 +2944,8 @@ METHOD(kernel_ipsec_t, update_sa, status_t,
 			if (rta->rta_type == XFRMA_ENCAP)
 			{	/* update encap tmpl */
 				encap = RTA_DATA(rta);
-				encap->encap_sport = ntohs(data->new_src->get_port(data->new_src));
-				encap->encap_dport = ntohs(data->new_dst->get_port(data->new_dst));
+				encap->encap_sport = htons(data->new_src->get_port(data->new_src));
+				encap->encap_dport = htons(data->new_dst->get_port(data->new_dst));
 			}
 			if (rta->rta_type == XFRMA_OFFLOAD_DEV)
 			{	/* update offload device */
@@ -2771,8 +2985,8 @@ METHOD(kernel_ipsec_t, update_sa, status_t,
 			goto failed;
 		}
 		encap->encap_type = UDP_ENCAP_ESPINUDP;
-		encap->encap_sport = ntohs(data->new_src->get_port(data->new_src));
-		encap->encap_dport = ntohs(data->new_dst->get_port(data->new_dst));
+		encap->encap_sport = htons(data->new_src->get_port(data->new_src));
+		encap->encap_dport = htons(data->new_dst->get_port(data->new_dst));
 		memset(&encap->encap_oa, 0, sizeof (xfrm_address_t));
 	}
 
@@ -3001,7 +3215,7 @@ static void install_route(private_kernel_netlink_ipsec_t *this,
 		policy->route = NULL;
 	}
 
-	DBG2(DBG_KNL, "installing route: %R via %H src %H dev %s", out->dst_ts,
+	DBG2(DBG_KNL, "installing route: %R via %+H src %H dev %s", out->dst_ts,
 		 route->gateway, route->src_ip, route->if_name);
 	switch (charon->kernel->add_route(charon->kernel, route->dst_net,
 									  route->prefixlen, route->gateway,
@@ -3064,6 +3278,12 @@ static status_t add_policy_internal(private_kernel_netlink_ipsec_t *this,
 	policy_info->action = mapping->type != POLICY_DROP ? XFRM_POLICY_ALLOW
 													   : XFRM_POLICY_BLOCK;
 	policy_info->share = XFRM_SHARE_ANY;
+
+	if (mapping->type == POLICY_IPSEC && policy->direction != POLICY_IN &&
+		mapping->forward_icmp)
+	{
+		policy_info->flags |= XFRM_POLICY_ICMP;
+	}
 
 	/* policies don't expire */
 	policy_info->lft.soft_byte_limit = XFRM_INF;
@@ -3262,10 +3482,7 @@ METHOD(kernel_ipsec_t, add_policy, status_t,
 	}
 
 	/* cache the assigned IPsec SA */
-	assigned_sa = policy_sa_create(this, id->dir, data->type, data->src,
-								   data->dst, id->src_ts, id->dst_ts, id->mark,
-								   id->if_id, data->hw_offload,
-								   data->pcpu_acquires, data->sa);
+	assigned_sa = policy_sa_create(this, id, data);
 	assigned_sa->auto_priority = get_priority(policy, data->prio, id->interface);
 	assigned_sa->priority = this->get_priority ? this->get_priority(id, data)
 											   : data->manual_prio;
@@ -3499,6 +3716,7 @@ METHOD(kernel_ipsec_t, del_policy, status_t,
 			auto_priority == mapping->auto_priority &&
 			data->type == mapping->type &&
 			data->pcpu_acquires == mapping->pcpu_acquires &&
+			data->forward_icmp == mapping->forward_icmp &&
 			ipsec_sa_equals(mapping->sa, &assigned_sa))
 		{
 			current->used_by->remove_at(current->used_by, enumerator);
@@ -4297,12 +4515,17 @@ static void check_kernel_features(private_kernel_netlink_ipsec_t *this)
 		{
 			case 2:
 			case 3:
-				/* before 6.2 the kernel only provided the last used time for
+				/* before 6.2, the kernel only provided the last used time for
 				 * specific outbound IPv6 SAs */
 				this->sa_lastused = a > 6 || (a == 6 && b >= 2);
+				/* before 6.3, the kernel rejected XFRM_STATE_AF_UNSPEC on
+				 * transport mode SAs */
+				this->sa_unspec_transport = a > 6 || (a == 6 && b >= 3);
 				/* 6.10 added support for SA direction and enforces certain
 				 * flags e.g. 0 replay window for outbound SAs */
 				this->sa_dir = a > 6 || (a == 6 && b >= 10);
+				/* 7.2 added support for SA migration */
+				this->sa_migrate = a > 7 || (a == 7 && b >= 2);
 				break;
 			default:
 				break;

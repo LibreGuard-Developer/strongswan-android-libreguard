@@ -61,11 +61,6 @@ struct private_stroke_list_t {
 };
 
 /**
- * Static certificate printer object
- */
-static certificate_printer_t *cert_printer = NULL;
-
-/**
  * Log tasks of a specific queue to out
  */
 static void log_task_q(FILE *out, ike_sa_t *ike_sa, task_queue_t q, char *name)
@@ -79,7 +74,7 @@ static void log_task_q(FILE *out, ike_sa_t *ike_sa, task_queue_t q, char *name)
 	{
 		if (!has)
 		{
-			fprintf(out, "%12s[%d]: Tasks %s: ", ike_sa->get_name(ike_sa),
+			fprintf(out, "%12s[%u]: Tasks %s: ", ike_sa->get_name(ike_sa),
 					ike_sa->get_unique_id(ike_sa), name);
 			has = TRUE;
 		}
@@ -100,7 +95,7 @@ static void log_ike_sa(FILE *out, ike_sa_t *ike_sa, bool all)
 	ike_sa_id_t *id = ike_sa->get_id(ike_sa);
 	time_t now = time_monotonic(NULL);
 
-	fprintf(out, "%12s[%d]: %N",
+	fprintf(out, "%12s[%u]: %N",
 			ike_sa->get_name(ike_sa), ike_sa->get_unique_id(ike_sa),
 			ike_sa_state_names, ike_sa->get_state(ike_sa));
 
@@ -125,7 +120,7 @@ static void log_ike_sa(FILE *out, ike_sa_t *ike_sa, bool all)
 
 		if (!eap_id->equals(eap_id, ike_sa->get_other_id(ike_sa)))
 		{
-			fprintf(out, "%12s[%d]: Remote %s identity: %Y\n",
+			fprintf(out, "%12s[%u]: Remote %s identity: %Y\n",
 					ike_sa->get_name(ike_sa), ike_sa->get_unique_id(ike_sa),
 					ike_sa->get_version(ike_sa) == IKEV1 ? "XAuth" : "EAP",
 					eap_id);
@@ -133,7 +128,7 @@ static void log_ike_sa(FILE *out, ike_sa_t *ike_sa, bool all)
 
 		ike_proposal = ike_sa->get_proposal(ike_sa);
 
-		fprintf(out, "%12s[%d]: %N SPIs: %.16"PRIx64"_i%s %.16"PRIx64"_r%s",
+		fprintf(out, "%12s[%u]: %N SPIs: %.16"PRIx64"_i%s %.16"PRIx64"_r%s",
 				ike_sa->get_name(ike_sa), ike_sa->get_unique_id(ike_sa),
 				ike_version_names, ike_sa->get_version(ike_sa),
 				be64toh(id->get_initiator_spi(id)),
@@ -188,7 +183,7 @@ static void log_ike_sa(FILE *out, ike_sa_t *ike_sa, bool all)
 			char buf[BUF_LEN];
 
 			snprintf(buf, BUF_LEN, "%P", ike_proposal);
-			fprintf(out, "%12s[%d]: IKE proposal: %s\n",
+			fprintf(out, "%12s[%u]: IKE proposal: %s\n",
 					ike_sa->get_name(ike_sa), ike_sa->get_unique_id(ike_sa),
 					buf+4);
 		}
@@ -213,7 +208,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 	config = child_sa->get_config(child_sa);
 	now = time_monotonic(NULL);
 
-	fprintf(out, "%12s{%d}:  %N, %N%s, reqid %u",
+	fprintf(out, "%12s{%u}:  %N, %N%s, reqid %u",
 			child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
 			child_sa_state_names, child_sa->get_state(child_sa),
 			ipsec_mode_names, child_sa->get_mode(child_sa),
@@ -237,7 +232,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 
 		if (all)
 		{
-			fprintf(out, "\n%12s{%d}:  ", child_sa->get_name(child_sa),
+			fprintf(out, "\n%12s{%u}:  ", child_sa->get_name(child_sa),
 					child_sa->get_unique_id(child_sa));
 
 			proposal = child_sa->get_proposal(child_sa);
@@ -329,7 +324,7 @@ static void log_child_sa(FILE *out, child_sa_t *child_sa, bool all)
 							child_sa->create_ts_enumerator(child_sa, TRUE));
 	other_ts = linked_list_create_from_enumerator(
 							child_sa->create_ts_enumerator(child_sa, FALSE));
-	fprintf(out, "\n%12s{%d}:   %#R === %#R\n",
+	fprintf(out, "\n%12s{%u}:   %#R === %#R\n",
 			child_sa->get_name(child_sa), child_sa->get_unique_id(child_sa),
 			my_ts, other_ts);
 	my_ts->destroy(my_ts);
@@ -650,9 +645,8 @@ METHOD(stroke_list_t, status, void,
 
 	half_open = charon->ike_sa_manager->get_half_open_count(
 										charon->ike_sa_manager, NULL, FALSE);
-	fprintf(out, "Security Associations (%u up, %u connecting):\n",
-		charon->ike_sa_manager->get_count(charon->ike_sa_manager) - half_open,
-		half_open);
+	fprintf(out, "Security Associations (%u total, %u connecting):\n",
+		charon->ike_sa_manager->get_count(charon->ike_sa_manager), half_open);
 	enumerator = charon->controller->create_ike_sa_enumerator(
 													charon->controller, wait);
 	while (enumerator->enumerate(enumerator, &ike_sa) && ferror(out) == 0)
@@ -770,7 +764,8 @@ static bool has_privkey(certificate_t *cert)
 /**
  * list all X.509 certificates matching the flags
  */
-static void stroke_list_x509_certs(linked_list_t *list, x509_flag_t flag)
+static void stroke_list_x509_certs(certificate_printer_t *cert_printer,
+								   linked_list_t *list, x509_flag_t flag)
 {
 	enumerator_t *enumerator;
 	certificate_t *cert;
@@ -794,7 +789,8 @@ static void stroke_list_x509_certs(linked_list_t *list, x509_flag_t flag)
 /**
  * list all other certificates types
  */
-static void stroke_list_other_certs(certificate_type_t type)
+static void stroke_list_other_certs(certificate_printer_t *cert_printer,
+									certificate_type_t type)
 {
 	enumerator_t *enumerator;
 	certificate_t *cert;
@@ -1006,17 +1002,18 @@ static void list_plugins(FILE *out)
 METHOD(stroke_list_t, list, void,
 	private_stroke_list_t *this, stroke_msg_t *msg, FILE *out)
 {
+	certificate_printer_t *cert_printer;
 	linked_list_t *cert_list = NULL;
 
 	cert_printer = certificate_printer_create(out, TRUE, msg->list.utc);
 
 	if (msg->list.flags & LIST_PUBKEYS)
 	{
-		stroke_list_other_certs(CERT_TRUSTED_PUBKEY);
+		stroke_list_other_certs(cert_printer, CERT_TRUSTED_PUBKEY);
 	}
 	if (msg->list.flags & LIST_CERTS)
 	{
-		stroke_list_other_certs(CERT_GPG);
+		stroke_list_other_certs(cert_printer, CERT_GPG);
 	}
 	if (msg->list.flags & (LIST_CERTS | LIST_CACERTS | LIST_OCSPCERTS | LIST_AACERTS))
 	{
@@ -1024,33 +1021,33 @@ METHOD(stroke_list_t, list, void,
 	}
 	if (msg->list.flags & LIST_CERTS)
 	{
-		stroke_list_x509_certs(cert_list, X509_NONE);
+		stroke_list_x509_certs(cert_printer, cert_list, X509_NONE);
 	}
 	if (msg->list.flags & LIST_CACERTS)
 	{
-		stroke_list_x509_certs(cert_list, X509_CA);
+		stroke_list_x509_certs(cert_printer, cert_list, X509_CA);
 	}
 	if (msg->list.flags & LIST_OCSPCERTS)
 	{
-		stroke_list_x509_certs(cert_list, X509_OCSP_SIGNER);
+		stroke_list_x509_certs(cert_printer, cert_list, X509_OCSP_SIGNER);
 	}
 	if (msg->list.flags & LIST_AACERTS)
 	{
-		stroke_list_x509_certs(cert_list, X509_AA);
+		stroke_list_x509_certs(cert_printer, cert_list, X509_AA);
 	}
 	DESTROY_OFFSET_IF(cert_list, offsetof(certificate_t, destroy));
 
 	if (msg->list.flags & LIST_ACERTS)
 	{
-		stroke_list_other_certs(CERT_X509_AC);
+		stroke_list_other_certs(cert_printer, CERT_X509_AC);
 	}
 	if (msg->list.flags & LIST_CRLS)
 	{
-		stroke_list_other_certs(CERT_X509_CRL);
+		stroke_list_other_certs(cert_printer, CERT_X509_CRL);
 	}
 	if (msg->list.flags & LIST_OCSP)
 	{
-		stroke_list_other_certs(CERT_X509_OCSP_RESPONSE);
+		stroke_list_other_certs(cert_printer, CERT_X509_OCSP_RESPONSE);
 	}
 	if (msg->list.flags & LIST_ALGS)
 	{
@@ -1061,7 +1058,6 @@ METHOD(stroke_list_t, list, void,
 		list_plugins(out);
 	}
 	cert_printer->destroy(cert_printer);
-	cert_printer = NULL;
 }
 
 /**

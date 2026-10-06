@@ -94,6 +94,7 @@ static const x501rdn_t x501rdns[] = {
 	{"STREET",				OID_STREET_ADDRESS,			ASN1_PRINTABLESTRING},
 	{"O", 					OID_ORGANIZATION,			ASN1_PRINTABLESTRING},
 	{"OU", 					OID_ORGANIZATION_UNIT,		ASN1_PRINTABLESTRING},
+	{"organizationIdentifier",	OID_ORGANIZATION_ID,	ASN1_PRINTABLESTRING},
 	{"T", 					OID_TITLE,					ASN1_PRINTABLESTRING},
 	{"D", 					OID_DESCRIPTION,			ASN1_PRINTABLESTRING},
 	{"postalAddress",		OID_POSTAL_ADDRESS,			ASN1_PRINTABLESTRING},
@@ -114,7 +115,7 @@ static const x501rdn_t x501rdns[] = {
 	{"unstructuredName",	OID_UNSTRUCTURED_NAME,		ASN1_IA5STRING},
 	{"UA",					OID_UNSTRUCTURED_ADDRESS,	ASN1_PRINTABLESTRING},
 	{"unstructuredAddress", OID_UNSTRUCTURED_ADDRESS,	ASN1_PRINTABLESTRING},
-	{"TCGID", 				OID_TCGID,					ASN1_PRINTABLESTRING}
+	{"TCGID", 				OID_TCGID,					ASN1_PRINTABLESTRING},
 };
 
 /**
@@ -1721,7 +1722,7 @@ METHOD(identification_t, clone_, identification_t*,
 		clone->encoded = chunk_from_str(strdup(this->encoded.ptr));
 		compile_regex(clone);
 	}
-	else if (this->encoded.len)
+	else
 	{
 		clone->encoded = chunk_clone(this->encoded);
 	}
@@ -2195,18 +2196,26 @@ identification_t *identification_create_from_string_with_regex(char *string)
  */
 identification_t *identification_create_from_data(chunk_t data)
 {
-	char buf[data.len + 1];
+	identification_t *id;
 
 	if (is_asn1(data) && is_valid_dn(data))
 	{
-		return identification_create_from_encoding(ID_DER_ASN1_DN, data);
+		id = identification_create_from_encoding(ID_DER_ASN1_DN, data);
+	}
+	else if (data.len && memchr(data.ptr, '\0', data.len))
+	{
+		/* treat identities that would get truncated below as opaque blobs */
+		id = identification_create_from_encoding(ID_KEY_ID, data);
 	}
 	else
 	{
-		/* use string constructor */
-		snprintf(buf, sizeof(buf), "%.*s", (int)data.len, data.ptr);
-		return identification_create_from_string(buf);
+		char *str;
+
+		str = strndup(data.ptr, data.len);
+		id = identification_create_from_string(str);
+		free(str);
 	}
+	return id;
 }
 
 /*

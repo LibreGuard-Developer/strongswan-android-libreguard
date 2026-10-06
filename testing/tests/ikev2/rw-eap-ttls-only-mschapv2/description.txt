@@ -1,0 +1,8 @@
+The roadwarriors <b>carol</b> and <b>dave</b> set up a connection each to gateway <b>moon</b>.
+The strong mutual authentication is based on <b>EAP-TTLS</b> only (without a separate IKEv2
+authentication) with the gateway being authenticated by a server certificate during the
+EAP-TLS tunnel setup (phase1 of EAP-TTLS). This tunnel protects the ensuing weak client
+authentication based on <b>EAP-MSCHAPv2</b> (phase2 of EAP-TTLS).
+<p/>
+Client <b>carol</b> presents the correct MSCHAPv2 password and succeeds whereas client
+<b>dave</b> chooses the wrong password and fails.

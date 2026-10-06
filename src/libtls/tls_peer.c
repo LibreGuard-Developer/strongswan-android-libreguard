@@ -232,7 +232,7 @@ static status_t process_server_hello(private_tls_peer_t *this,
 		return NEED_MORE;
 	}
 
-	is_retry_request = chunk_equals_const(random, tls_hello_retry_request_magic);
+	is_retry_request = chunk_equals_const(tls_hello_retry_request_magic, random);
 
 	memcpy(this->server_random, random.ptr, sizeof(this->server_random));
 
@@ -936,9 +936,14 @@ static status_t process_certreq(private_tls_peer_t *this, bio_reader_t *reader)
 	}
 	else
 	{
-		/* certificate request context as described in RFC 8446, section 4.3.2 */
-		reader->read_data8(reader, &context);
-		reader->read_data16(reader, &ext);
+		/* certificate request as described in RFC 8446, section 4.3.2 */
+		if (!reader->read_data8(reader, &context) ||
+			!reader->read_data16(reader, &ext))
+		{
+			DBG1(DBG_TLS, "received invalid CertificateRequest");
+			this->alert->add(this->alert, TLS_FATAL, TLS_DECODE_ERROR);
+			return NEED_MORE;
+		}
 		extensions = bio_reader_create(ext);
 		while (extensions->remaining(extensions))
 		{
@@ -984,7 +989,7 @@ static status_t process_certreq(private_tls_peer_t *this, bio_reader_t *reader)
 			}
 			extension->destroy(extension);
 		}
-	extensions->destroy(extensions);
+		extensions->destroy(extensions);
 	}
 	this->certreq_received = TRUE;
 	this->state = STATE_CERTREQ_RECEIVED;
@@ -1008,7 +1013,7 @@ static status_t process_hello_done(private_tls_peer_t *this,
  */
 static status_t process_finished(private_tls_peer_t *this, bio_reader_t *reader)
 {
-	chunk_t received, verify_data;
+	chunk_t received, verify_data = chunk_empty;
 	u_char buf[12];
 
 	if (this->tls->get_version_max(this->tls) < TLS_1_3)
@@ -1035,24 +1040,25 @@ static status_t process_finished(private_tls_peer_t *this, bio_reader_t *reader)
 		{
 			DBG1(DBG_TLS, "calculating server finished failed");
 			this->alert->add(this->alert, TLS_FATAL, TLS_INTERNAL_ERROR);
-			return NEED_MORE;
+			goto out;
 		}
 	}
 
-	if (!chunk_equals_const(received, verify_data))
+	if (!chunk_equals_const(verify_data, received))
 	{
 		DBG1(DBG_TLS, "received server finished invalid");
 		this->alert->add(this->alert, TLS_FATAL, TLS_DECRYPT_ERROR);
-		return NEED_MORE;
-	}
-
-	if (verify_data.ptr != buf)
-	{
-		chunk_free(&verify_data);
+		goto out;
 	}
 
 	this->crypto->append_handshake(this->crypto, TLS_FINISHED, received);
 	this->state = STATE_FINISHED_RECEIVED;
+
+out:
+	if (verify_data.ptr && verify_data.ptr != buf)
+	{
+		chunk_free(&verify_data);
+	}
 	return NEED_MORE;
 }
 

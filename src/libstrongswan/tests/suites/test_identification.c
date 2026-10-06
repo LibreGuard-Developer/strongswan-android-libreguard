@@ -80,6 +80,15 @@ START_TEST(test_from_data)
 	ck_assert(chunk_equals(expected, encoding));
 	a->destroy(a);
 
+	/* data that contains 0 characters is not handled with the string parser */
+	expected = chunk_from_chars('f', 'o', 'o', '\0', 'b', 'a', 'r');
+	a = identification_create_from_data(expected);
+	ck_assert(ID_KEY_ID == a->get_type(a));
+	encoding = a->get_encoding(a);
+	ck_assert(expected.ptr != encoding.ptr);
+	ck_assert(chunk_equals(expected, encoding));
+	a->destroy(a);
+
 	/* everything else is handled by the string parser */
 	expected = chunk_from_str("moon@strongswan.org");
 	a = identification_create_from_data(expected);
@@ -1608,6 +1617,29 @@ START_TEST(test_clone)
 }
 END_TEST
 
+START_TEST(test_clone_empty)
+{
+	identification_t *a, *b;
+	chunk_t a_enc, b_enc;
+
+	/* this produces an empty but non-NULL encoding, which previously caused a
+	 * double-free when destroying a clone */
+	a = identification_create_from_string("@#");
+	ck_assert(a != NULL);
+	a_enc = a->get_encoding(a);
+
+	b = a->clone(a);
+	ck_assert(b != NULL);
+	ck_assert(a != b);
+	b_enc = b->get_encoding(b);
+	ck_assert(!a_enc.len && !b_enc.len);
+	ck_assert(a_enc.ptr != b_enc.ptr || (!a_enc.ptr && !b_enc.ptr));
+
+	b->destroy(b);
+	a->destroy(a);
+}
+END_TEST
+
 Suite *identification_suite_create()
 {
 	Suite *s;
@@ -1670,6 +1702,7 @@ Suite *identification_suite_create()
 
 	tc = tcase_create("clone");
 	tcase_add_test(tc, test_clone);
+	tcase_add_test(tc, test_clone_empty);
 	suite_add_tcase(s, tc);
 
 	return s;

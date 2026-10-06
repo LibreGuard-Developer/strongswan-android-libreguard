@@ -1517,6 +1517,10 @@ CALLBACK(filter_addresses, bool,
 		{	/* skip deprecated addresses or those with an unusable scope */
 			continue;
 		}
+		if (host_is_loopback(addr->ip) || host_is_linklocal(addr->ip))
+		{	/* skip loopback and link-local addresses explicitly */
+			continue;
+		}
 		if (!addr->refcount && addr->ip->get_family(addr->ip) == AF_INET6)
 		{	/* handle non-VIP temporary IPv6 addresses according to config */
 			bool temporary = (addr->flags & IFA_F_TEMPORARY) == IFA_F_TEMPORARY;
@@ -1553,10 +1557,6 @@ CALLBACK(filter_interfaces, bool,
 	{
 		if (!(data->which & ADDR_TYPE_IGNORED) && !iface->usable)
 		{	/* skip interfaces excluded by config */
-			continue;
-		}
-		if (!(data->which & ADDR_TYPE_LOOPBACK) && (iface->flags & IFF_LOOPBACK))
-		{	/* ignore loopback devices */
 			continue;
 		}
 		if (!(data->which & ADDR_TYPE_DOWN) && !(iface->flags & IFF_UP))
@@ -2075,9 +2075,9 @@ static host_t *get_route(private_kernel_netlink_net_t *this, host_t *dest,
 				*iface = get_interface_name_by_index(this, best->oif);
 			}
 		}
-		if (!addr && !match_net)
-		{	/* fallback to destination address */
-			addr = dest->clone(dest);
+		if (!addr && !match_net && iface && *iface)
+		{
+			addr = host_create_any(dest->get_family(dest));
 		}
 	}
 	else
@@ -2450,6 +2450,17 @@ METHOD(kernel_net_t, add_ip, status_t,
 			}
 			this->lock->unlock(this->lock);
 		}
+		this->lock->write_lock(this->lock);
+		entry = this->vips->get_match(this->vips, &lookup,
+									  (void*)addr_map_entry_match);
+		if (entry)
+		{	/* clean up the pending entry we inserted */
+			iface->addrs->remove(iface->addrs, addr, NULL);
+			addr_map_entry_remove(this->vips, addr, iface);
+			addr_entry_destroy(addr);
+			this->condvar->broadcast(this->condvar);
+		}
+		this->lock->unlock(this->lock);
 		DBG1(DBG_KNL, "adding virtual IP %H failed", virtual_ip);
 		return FAILED;
 	}
@@ -2600,7 +2611,8 @@ static status_t manage_srcroute(private_kernel_netlink_net_t *this,
 	{
 		chunk = src_ip->get_address(src_ip);
 		netlink_add_attribute(hdr, RTA_PREFSRC, chunk, sizeof(request));
-		if (gateway && gateway->get_family(gateway) == src_ip->get_family(src_ip))
+		if (gateway && !gateway->is_anyaddr(gateway) &&
+			gateway->get_family(gateway) == src_ip->get_family(src_ip))
 		{
 			chunk = gateway->get_address(gateway);
 			netlink_add_attribute(hdr, RTA_GATEWAY, chunk, sizeof(request));

@@ -20,6 +20,7 @@
 
 #define AVP_EAP_MESSAGE		79
 #define AVP_HEADER_LEN		 8
+#define AVP_LENGTH_MAX		 UINT16_MAX
 
 typedef struct private_eap_ttls_avp_t private_eap_ttls_avp_t;
 
@@ -119,7 +120,7 @@ METHOD(eap_ttls_avp_t, process, status_t,
 		chunk_free(&this->input);
 		this->inpos = 0;
 
-		if (!success)
+		if (!success || avp_len < AVP_HEADER_LEN || avp_len > AVP_LENGTH_MAX)
 		{
 			DBG1(DBG_IKE, "received invalid AVP header");
 			return FAILED;
@@ -130,7 +131,7 @@ METHOD(eap_ttls_avp_t, process, status_t,
 			return FAILED;
 		}
 		this->process_header = FALSE;
-		this->data_len = avp_len - 8;
+		this->data_len = avp_len - AVP_HEADER_LEN;
 		this->input = chunk_alloc(this->data_len + (4 - avp_len) % 4);
 	}
 

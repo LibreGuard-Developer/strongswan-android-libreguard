@@ -35,18 +35,17 @@ typedef enum kernel_address_type_t kernel_address_type_t;
  * Type of addresses (e.g. when enumerating them)
  */
 enum kernel_address_type_t {
-	/** normal addresses (on regular, up, non-ignored) interfaces */
+	/** addresses on up and non-ignored interfaces, with usable scope and
+	 * non-deprecated, includes globals on loopback interfaces */
 	ADDR_TYPE_REGULAR = (1 << 0),
 	/** addresses on down interfaces */
 	ADDR_TYPE_DOWN =  (1 << 1),
 	/** addresses on ignored interfaces */
 	ADDR_TYPE_IGNORED = (1 << 2),
-	/** addresses on loopback interfaces */
-	ADDR_TYPE_LOOPBACK = (1 << 3),
 	/** virtual IP addresses */
-	ADDR_TYPE_VIRTUAL = (1 << 4),
+	ADDR_TYPE_VIRTUAL = (1 << 3),
 	/** to enumerate all available addresses */
-	ADDR_TYPE_ALL = (1 << 5) - 1,
+	ADDR_TYPE_ALL = (1 << 4) - 1,
 };
 
 /**
@@ -85,6 +84,8 @@ struct kernel_net_t {
 	 * The returned host is allocated and must be destroyed.
 	 * An optional src address can be used to check if a route is available
 	 * for the given source to dest.
+	 * 0.0.0.0/:: may get returned if an interface but no next hop can be
+	 * determined.
 	 *
 	 * @param dest			target destination address
 	 * @param prefix		prefix length if dest is a subnet, -1 for auto

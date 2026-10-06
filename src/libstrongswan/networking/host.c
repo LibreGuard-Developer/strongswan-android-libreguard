@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006-2014 Tobias Brunner
+ * Copyright (C) 2006-2026 Tobias Brunner
  * Copyright (C) 2006 Daniel Roethlisberger
  * Copyright (C) 2005-2006 Martin Willi
  * Copyright (C) 2005 Jan Hutter
@@ -16,6 +16,8 @@
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * for more details.
  */
+
+#include <errno.h>
 
 #include "host.h"
 
@@ -571,8 +573,9 @@ bool host_create_from_range(char *string, host_t **from, host_t **to)
  */
 host_t *host_create_from_subnet(char *string, int *bits)
 {
-	char *pos, buf[64];
+	char *pos, *end, buf[64];
 	host_t *net;
+	long netbits;
 
 	pos = strchr(string, '/');
 	if (pos)
@@ -583,8 +586,24 @@ host_t *host_create_from_subnet(char *string, int *bits)
 		}
 		strncpy(buf, string, pos - string);
 		buf[pos - string] = '\0';
-		*bits = atoi(pos + 1);
-		return host_create_from_string(buf, 0);
+		errno = 0;
+		netbits = strtol(pos + 1, &end, 10);
+		if (errno || end == pos + 1 || *end || netbits < 0 || netbits > 128)
+		{
+			return NULL;
+		}
+		net = host_create_from_string(buf, 0);
+		if (!net)
+		{
+			return NULL;
+		}
+		if (net->get_family(net) == AF_INET && netbits > 32)
+		{
+			net->destroy(net);
+			return NULL;
+		}
+		*bits = netbits;
+		return net;
 	}
 	net = host_create_from_string(string, 0);
 	if (net)
@@ -681,4 +700,66 @@ host_t *host_create_any(int family)
 	}
 	free(this);
 	return NULL;
+}
+
+/*
+ * Described in header
+ */
+bool host_is_loopback(host_t *host)
+{
+	private_host_t *this = (private_host_t*)host;
+
+	if (!host)
+	{
+		return FALSE;
+	}
+
+	switch (this->address.sa_family)
+	{
+		case AF_INET:
+		{
+			/* for IPv4 it's the whole 127.0.0.0/8 subnet */
+			return ntohl(this->address4.sin_addr.s_addr) >> 24 == 0x7f;
+		}
+		case AF_INET6:
+		{
+			/* only a single address (::1) for IPv6 */
+			return IN6_IS_ADDR_LOOPBACK(&this->address6.sin6_addr);
+		}
+		default:
+		{
+			return FALSE;
+		}
+	}
+}
+
+/*
+ * Described in header
+ */
+bool host_is_linklocal(host_t *host)
+{
+	private_host_t *this = (private_host_t*)host;
+
+	if (!host)
+	{
+		return FALSE;
+	}
+
+	switch (this->address.sa_family)
+	{
+		case AF_INET:
+		{
+			/* 169.254.0.0/16 */
+			return ntohl(this->address4.sin_addr.s_addr) >> 16 == 0xa9fe;
+		}
+		case AF_INET6:
+		{
+			/* fe80::/10 */
+			return IN6_IS_ADDR_LINKLOCAL(&this->address6.sin6_addr);
+		}
+		default:
+		{
+			return FALSE;
+		}
+	}
 }

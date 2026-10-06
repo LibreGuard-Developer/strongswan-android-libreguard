@@ -687,7 +687,7 @@ METHOD(plugin_t, get_features, int,
 			PLUGIN_PROVIDE(KE, ECP_521_BIT),
 			PLUGIN_PROVIDE(KE, ECP_224_BIT),
 			PLUGIN_PROVIDE(KE, ECP_192_BIT),
-#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L || defined(OPENSSL_IS_AWSLC)
 			PLUGIN_PROVIDE(KE, ECP_256_BP),
 			PLUGIN_PROVIDE(KE, ECP_384_BP),
 			PLUGIN_PROVIDE(KE, ECP_512_BP),
@@ -776,6 +776,13 @@ PLUGIN_DEFINE(openssl)
 {
 	private_openssl_plugin_t *this;
 	int fips_mode;
+
+	/* prevent OpenSSL from using posix_memalign() if leak detective is enabled,
+	 * which doesn't wrap it */
+	if (lib->leak_detective)
+	{
+		CRYPTO_set_mem_functions((void*)malloc, (void*)realloc, (void*)free);
+	}
 
 	fips_mode = lib->settings->get_int(lib->settings,
 							"%s.plugins.openssl.fips_mode", FIPS_MODE, lib->ns);

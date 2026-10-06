@@ -8,10 +8,6 @@ concurrency:
 
 env:
   CCACHE_BASEDIR: ${{ github.workspace }}
-  CCACHE_COMPRESS: true
-  CCACHE_MAXSIZE: 200M
-  # CodeQL currently doesn't support ccache
-  CCACHE_DISABLE: true
   OS_NAME: linux
 
 jobs:
@@ -30,49 +26,62 @@ jobs:
     if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
     runs-on: ubuntu-latest
     permissions:
-      actions: read
-      contents: read
+      actions: write
       security-events: write
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'cpp', 'python', 'ruby' ]
+        language: [ 'python', 'ruby' ]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v4
       with:
         languages: ${{ matrix.language }}
         config-file: ./.github/codeql/config.yml
+        trap-caching: false
 
-    - if: matrix.language == 'python' || matrix.language == 'ruby'
-      name: Autobuild
-      uses: github/codeql-action/autobuild@v3
-
-    # this follows the steps of the Linux workflow
-    - if: matrix.language == 'cpp'
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/ccache
-        key: ccache-ubuntu-latest-gcc-codeql-${{ github.sha }}
-        restore-keys: |
-          ccache-ubuntu-latest-gcc-codeql
-          ccache-ubuntu-latest-gcc-all-${{ github.sha }}
-          ccache-ubuntu-latest-gcc-all-
-          ccache-ubuntu-latest-gcc-
-    - if: matrix.language == 'cpp'
-      run: |
-          sudo apt-get install -qq ccache
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-          ccache -z
-    - if: matrix.language == 'cpp'
-      env:
-        TEST: codeql
-      uses: ./.github/actions/default
-    - if: matrix.language == 'cpp'
-      run: ccache -s
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v4
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
+
+  analyze-cpp:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      security-events: write
+    env:
+      TEST: codeql
+    steps:
+    - uses: actions/checkout@v6
+    - run: ./scripts/test.sh deps
+    - uses: actions/cache/restore@v5
+      with:
+        path: ~/.cache/ccache
+        key: ccache-deps-ubuntu-latest-gcc-all
+    - run: |
+        sudo apt-get install -qq ccache
+        echo "OLD_PATH=$PATH" >> $GITHUB_ENV
+        echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+        ccache -z
+    - run: ./scripts/test.sh build-deps
+    - run: ccache -sv
+    - run: echo "PATH=$OLD_PATH" >> $GITHUB_ENV
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: cpp
+        config-file: ./.github/codeql/config.yml
+        trap-caching: false
+    - run: ./scripts/test.sh
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:cpp"

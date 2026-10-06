@@ -209,6 +209,81 @@ static void list_label(vici_builder_t *b, child_sa_t *child, child_cfg_t *cfg)
 }
 
 /**
+ * Print all algorithms of the given type
+ */
+static void list_transforms(vici_builder_t *b, proposal_t *proposal, char *name,
+							transform_type_t type)
+{
+	enumerator_t *enumerator;
+	enum_name_t *names;
+	char buf[BUF_LEN];
+	uint16_t alg, ks;
+	bool first = TRUE;
+
+	names = transform_get_enum_names(type);
+
+	enumerator = proposal->create_enumerator(proposal, type);
+	while (enumerator->enumerate(enumerator, &alg, &ks))
+	{
+		if (first)
+		{
+			b->begin_list(b, name);
+			first = FALSE;
+		}
+		buf[0] = '\0';
+		if (ks)
+		{
+			snprintf(buf, sizeof(buf), "_%u", ks);
+		}
+		b->add_li(b, "%N%s", names, alg, buf);
+	}
+	enumerator->destroy(enumerator);
+
+	if (!first)
+	{
+		b->end_list(b);
+	}
+}
+
+/**
+ * List proposals for a config
+ */
+static void list_proposals(vici_builder_t *b, linked_list_t *proposals,
+						   char *label, protocol_id_t protocol)
+{
+	enumerator_t *enumerator;
+	proposal_t *proposal;
+	char buf[BUF_LEN];
+	u_int num = 0;
+
+	b->begin_section(b, label);
+	enumerator = proposals->create_enumerator(proposals);
+	while (enumerator->enumerate(enumerator, &proposal))
+	{
+		if (proposal->get_protocol(proposal) == protocol)
+		{
+			snprintf(buf, sizeof(buf), "%u", num++);
+			b->begin_section(b, buf);
+			list_transforms(b, proposal, "encr", ENCRYPTION_ALGORITHM);
+			list_transforms(b, proposal, "integ", INTEGRITY_ALGORITHM);
+			list_transforms(b, proposal, "prf", PSEUDO_RANDOM_FUNCTION);
+			list_transforms(b, proposal, "ke", KEY_EXCHANGE_METHOD);
+			list_transforms(b, proposal, "ake1", ADDITIONAL_KEY_EXCHANGE_1);
+			list_transforms(b, proposal, "ake2", ADDITIONAL_KEY_EXCHANGE_2);
+			list_transforms(b, proposal, "ake3", ADDITIONAL_KEY_EXCHANGE_3);
+			list_transforms(b, proposal, "ake4", ADDITIONAL_KEY_EXCHANGE_4);
+			list_transforms(b, proposal, "ake5", ADDITIONAL_KEY_EXCHANGE_5);
+			list_transforms(b, proposal, "ake6", ADDITIONAL_KEY_EXCHANGE_6);
+			list_transforms(b, proposal, "ake7", ADDITIONAL_KEY_EXCHANGE_7);
+			list_transforms(b, proposal, "sn", EXTENDED_SEQUENCE_NUMBERS);
+			b->end_section(b);
+		}
+	}
+	enumerator->destroy(enumerator);
+	b->end_section(b);
+}
+
+/**
  * List additional key exchanges
  */
 static void list_ake(vici_builder_t *b, proposal_t *proposal)
@@ -1006,6 +1081,10 @@ CALLBACK(list_conns, vici_message_t*,
 		b->add_kv(b, "unique", "%N", unique_policy_names,
 				  peer_cfg->get_unique_policy(peer_cfg));
 
+		list = ike_cfg->get_proposals(ike_cfg, FALSE);
+		list_proposals(b, list, "proposals", PROTO_IKE);
+		list->destroy_offset(list, offsetof(proposal_t, destroy));
+
 		dpd_delay = peer_cfg->get_dpd(peer_cfg);
 		if (dpd_delay)
 		{
@@ -1051,6 +1130,11 @@ CALLBACK(list_conns, vici_message_t*,
 					  child_cfg->get_dpd_action(child_cfg));
 			b->add_kv(b, "close_action", "%N", action_names,
 					  child_cfg->get_close_action(child_cfg));
+
+			list = child_cfg->get_proposals(child_cfg, FALSE, FALSE);
+			list_proposals(b, list, "esp_proposals", PROTO_ESP);
+			list_proposals(b, list, "ah_proposals", PROTO_AH);
+			list->destroy_offset(list, offsetof(proposal_t, destroy));
 
 			b->begin_list(b, "local-ts");
 			list = child_cfg->get_traffic_selectors(child_cfg, TRUE, NULL);

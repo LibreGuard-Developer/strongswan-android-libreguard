@@ -203,7 +203,7 @@ char *asn1_oid_to_string(chunk_t oid)
 	size_t len = 64;
 	char buf[len], *pos = buf;
 	int written;
-	u_int val;
+	uint32_t val;
 
 	if (!oid.len)
 	{
@@ -222,7 +222,11 @@ char *asn1_oid_to_string(chunk_t oid)
 
 	while (oid.len)
 	{
-		val = (val << 7) + (u_int)(oid.ptr[0] & 0x7f);
+		if (val > (UINT32_MAX >> 7))
+		{
+			return NULL;
+		}
+		val = (val << 7) + (uint32_t)(oid.ptr[0] & 0x7f);
 
 		if (oid.ptr[0] < 128)
 		{
@@ -839,19 +843,21 @@ chunk_t asn1_bitstring(const char *mode, chunk_t content)
  */
 chunk_t asn1_integer(const char *mode, chunk_t content)
 {
-	chunk_t zero = chunk_from_chars(0x00), object;
+	chunk_t zero = chunk_from_chars(0x00), object, to_free = chunk_empty;
 	size_t len;
 	u_char *pos;
-	bool move;
 
-	if (content.len == 0)
-	{	/* make sure 0 is encoded properly */
+	if (*mode == 'm')
+	{
+		to_free = content;
+	}
+	if (!content.len)
+	{	/* make sure empty input ("0") is encoded properly */
 		content = zero;
-		move = FALSE;
 	}
 	else
-	{
-		move = (*mode == 'm');
+	{	/* skip any zero-padding to avoid encoding values incorrectly */
+		content = chunk_skip_zero(content);
 	}
 
 	/* ASN.1 integers must be positive numbers in two's complement */
@@ -863,9 +869,9 @@ chunk_t asn1_integer(const char *mode, chunk_t content)
 	}
 	memcpy(pos, content.ptr, content.len);
 
-	if (move)
+	if (to_free.ptr)
 	{
-		free(content.ptr);
+		free(to_free.ptr);
 	}
 	return object;
 }

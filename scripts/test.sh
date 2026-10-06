@@ -4,7 +4,7 @@
 build_botan()
 {
 	# same revision used in the build recipe of the testing environment
-	BOTAN_REV=3.7.1
+	BOTAN_REV=3.12.0
 	BOTAN_DIR=$DEPS_BUILD_DIR/botan
 
 	if test -d "$BOTAN_DIR"; then
@@ -31,7 +31,7 @@ build_botan()
 	cd $BOTAN_DIR &&
 	git checkout -qf $BOTAN_REV &&
 	./configure.py --amalgamation $BOTAN_CONFIG &&
-	make -j$(nproc) libs >/dev/null &&
+	make -j$NPROC libs >/dev/null &&
 	sudo make install >/dev/null &&
 	sudo ldconfig || exit $?
 	cd -
@@ -39,7 +39,7 @@ build_botan()
 
 build_wolfssl()
 {
-	WOLFSSL_REV=v5.8.2-stable
+	WOLFSSL_REV=v5.9.4-stable
 	WOLFSSL_DIR=$DEPS_BUILD_DIR/wolfssl
 
 	if test -d "$WOLFSSL_DIR"; then
@@ -57,14 +57,14 @@ build_wolfssl()
 					--enable-curve25519 --enable-curve448 --enable-des3
 					--enable-ecccustcurves --enable-ed25519 --enable-ed448
 					--enable-keygen --enable-mlkem --with-max-rsa-bits=8192
-					--enable-md4 --enable-rsapss --enable-sha3 --enable-shake256"
+					--enable-rsapss --enable-sha3 --enable-shake256"
 
 	git clone https://github.com/wolfSSL/wolfssl.git $WOLFSSL_DIR &&
 	cd $WOLFSSL_DIR &&
 	git checkout -qf $WOLFSSL_REV &&
 	./autogen.sh &&
 	./configure C_EXTRA_FLAGS="$WOLFSSL_CFLAGS" $WOLFSSL_CONFIG &&
-	make -j$(nproc) >/dev/null &&
+	make -j$NPROC >/dev/null &&
 	sudo make install >/dev/null &&
 	sudo ldconfig || exit $?
 	cd -
@@ -72,7 +72,7 @@ build_wolfssl()
 
 build_tss2()
 {
-	TSS2_REV=3.2.3
+	TSS2_REV=4.2.0
 	TSS2_PKG=tpm2-tss-$TSS2_REV
 	TSS2_DIR=$DEPS_BUILD_DIR/$TSS2_PKG
 	TSS2_SRC=https://github.com/tpm2-software/tpm2-tss/releases/download/$TSS2_REV/$TSS2_PKG.tar.gz
@@ -86,7 +86,7 @@ build_tss2()
 	curl -L $TSS2_SRC | tar xz -C $DEPS_BUILD_DIR &&
 	cd $TSS2_DIR &&
 	./configure --prefix=$DEPS_PREFIX --disable-doxygen-doc &&
-	make -j$(nproc) >/dev/null &&
+	make -j$NPROC >/dev/null &&
 	sudo make install >/dev/null &&
 	sudo ldconfig || exit $?
 	cd -
@@ -94,7 +94,7 @@ build_tss2()
 
 build_openssl()
 {
-	SSL_REV=openssl-3.6.0
+	: ${SSL_REV=openssl-3.6.5}
 	SSL_DIR=$DEPS_BUILD_DIR/openssl
 	SSL_INS=$DEPS_PREFIX/ssl
 	SSL_OPT="-d shared no-dtls no-ssl3 no-zlib no-idea no-psk
@@ -102,17 +102,6 @@ build_openssl()
 
 	if test -d "$SSL_DIR"; then
 		return
-	fi
-
-	if test "$LEAK_DETECTIVE" = "yes"; then
-		# insist on compiling with gcc and debug information as symbols are
-		# otherwise not found, but we can disable SRP (see below)
-		SSL_OPT="$SSL_OPT no-srp CC=gcc -d"
-	elif test "$CC" != "clang"; then
-		# when using ASan with clang, llvm-symbolizer is used to resolve symbols
-		# and this tool links libcurl, which in turn requires SRP, so we can
-		# only disable it when not building with clang
-		SSL_OPT="$SSL_OPT no-srp"
 	fi
 
 	echo "$ build_openssl()"
@@ -125,7 +114,7 @@ build_openssl()
 	else
 		cd $SSL_DIR &&
 		./config --prefix=$SSL_INS --openssldir=$SSL_INS --libdir=lib $SSL_OPT &&
-		make -j$(nproc) >/dev/null &&
+		make -j$NPROC >/dev/null &&
 		sudo make install_sw >/dev/null &&
 		sudo ldconfig || exit $?
 		cd -
@@ -134,7 +123,7 @@ build_openssl()
 
 build_awslc()
 {
-	LC_REV=1.61.1
+	LC_REV=5.11.0
 	LC_PKG=aws-lc-$LC_REV
 	LC_DIR=$DEPS_BUILD_DIR/$LC_PKG
 	LC_SRC=https://github.com/aws/aws-lc/archive/refs/tags/v${LC_REV}.tar.gz
@@ -179,20 +168,6 @@ system_uses_openssl3()
 
 prepare_system_openssl()
 {
-	# On systems that ship OpenSSL 3 (e.g. Ubuntu 22.04+), we require debug
-	# symbols to whitelist leaks
-	if test "$1" = "deps"; then
-		echo "deb http://ddebs.ubuntu.com $(lsb_release -cs) main restricted
-			deb http://ddebs.ubuntu.com $(lsb_release -cs)-updates main restricted
-			deb http://ddebs.ubuntu.com $(lsb_release -cs)-proposed main restricted" | \
-			sudo tee -a /etc/apt/sources.list.d/ddebs.list
-		sudo apt-get install -qq ubuntu-dbgsym-keyring
-		if [ "$ID" = "ubuntu" -a "$VERSION_ID" = "24.04" ]; then
-			DEPS="$DEPS libssl3t64-dbgsym"
-		else
-			DEPS="$DEPS libssl3-dbgsym"
-		fi
-	fi
 	if test "$LEAK_DETECTIVE" = "yes"; then
 		# make sure we can properly whitelist functions with leak detective
 		DEPS="$DEPS binutils-dev"
@@ -208,6 +183,7 @@ prepare_system_openssl()
 : ${BUILD_DIR=$PWD}
 : ${DEPS_BUILD_DIR=$BUILD_DIR/..}
 : ${DEPS_PREFIX=/usr/local}
+: ${NPROC=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 2)}
 
 if [ -e /etc/os-release ]; then
 	. /etc/os-release
@@ -222,7 +198,7 @@ DEPS="libgmp-dev"
 CFLAGS="-g -O2"
 
 case "$TEST" in
-default)
+default|ld)
 	# should be the default, but lets make sure
 	CONFIG="--with-printf-hooks=glibc"
 	if system_uses_openssl3; then
@@ -236,6 +212,10 @@ openssl*)
 	if test "$TEST" = "openssl-3"; then
 		DEPS=""
 		use_custom_openssl $1
+	elif test "$TEST" = "openssl-4"; then
+		DEPS=""
+		SSL_REV=openssl-4.0.3
+		use_custom_openssl $1
 	elif test "$TEST" = "openssl-awslc"; then
 		DEPS="cmake ninja-build golang"
 		use_custom_openssl $1
@@ -245,11 +225,6 @@ openssl*)
 		# the kdf plugin is necessary to build against older OpenSSL versions
 		TESTS_PLUGINS="$TESTS_PLUGINS kdf"
 	fi
-	;;
-gcrypt)
-	CONFIG="--disable-defaults --enable-pki --enable-gcrypt --enable-random --enable-pem --enable-pkcs1 --enable-pkcs8 --enable-gcm --enable-hmac --enable-kdf -enable-curve25519 --enable-x509 --enable-constraints"
-	export TESTS_PLUGINS="test-vectors gcrypt! random pem pkcs1 pkcs8 gcm hmac kdf curve25519 x509 constraints"
-	DEPS="libgcrypt20-dev"
 	;;
 botan)
 	CONFIG="--disable-defaults --enable-pki --enable-botan --enable-pem --enable-hmac --enable-x509 --enable-constraints --enable-drbg"
@@ -282,15 +257,13 @@ all|alpine|codeql|coverage|sonarcloud|no-dbg|no-testable-ke)
 	if [ "$TEST" = "no-dbg" ]; then
 		CFLAGS="$CFLAGS -DDEBUG_LEVEL=-1"
 	fi
-	CONFIG="--enable-all --disable-android-dns --disable-android-log
-			--disable-kernel-pfroute --disable-keychain
-			--disable-lock-profiler --disable-padlock --disable-fuzzing
+	CONFIG="--enable-all --disable-android-log
+			--disable-kernel-pfroute
+			--disable-lock-profiler --disable-fuzzing
 			--disable-osx-attr --disable-tkm
 			--disable-unwind-backtraces
 			--disable-svc --disable-dbghelp-backtraces --disable-socket-win
 			--disable-kernel-wfp --disable-kernel-iph --disable-winhttp"
-	# not enabled on the build server
-	CONFIG="$CONFIG --disable-af-alg"
 	if test "$TEST" != "coverage"; then
 		CONFIG="$CONFIG --disable-coverage"
 	else
@@ -300,10 +273,10 @@ all|alpine|codeql|coverage|sonarcloud|no-dbg|no-testable-ke)
 	if [ "$TEST" = "no-testable-ke" ]; then
 		CONFIG="$CONFIG --without-testable-ke"
 	fi
-	DEPS="$DEPS libcurl4-gnutls-dev libsoup-3.0-dev libunbound-dev libldns-dev
-		  libmysqlclient-dev libsqlite3-dev clearsilver-dev libfcgi-dev
+	DEPS="$DEPS libcurl4-gnutls-dev libunbound-dev libldns-dev
+		  libmysqlclient-dev libsqlite3-dev
 		  libldap2-dev libpcsclite-dev libpam0g-dev binutils-dev libnm-dev
-		  libgcrypt20-dev libjson-c-dev libtspi-dev libsystemd-dev
+		  libjson-c-dev libtspi-dev libsystemd-dev
 		  libselinux1-dev libiptc-dev ruby-rubygems python3-build tox"
 	if [ "$ID" = "ubuntu" -a "$VERSION_ID" = "22.04" -a "$1" = "build-deps" ]; then
 		# python3-build is broken on 22.04 with venv (https://bugs.launchpad.net/ubuntu/+source/python-build/+bug/1992108)
@@ -313,9 +286,9 @@ all|alpine|codeql|coverage|sonarcloud|no-dbg|no-testable-ke)
 	fi
 	if [ "$TEST" = "alpine" ]; then
 		# override the whole list for alpine
-		DEPS="git gmp-dev openldap-dev curl-dev ldns-dev unbound-dev libsoup3-dev
-			  libxml2-dev tpm2-tss-dev tpm2-tss-sys mariadb-dev wolfssl-dev
-			  libgcrypt-dev botan3-dev pcsc-lite-dev networkmanager-dev
+		DEPS="git gmp-dev openldap-dev curl-dev ldns-dev unbound-dev
+			  tpm2-tss-dev tpm2-tss-sys mariadb-dev wolfssl-dev
+			  botan3-dev pcsc-lite-dev networkmanager-dev
 			  linux-pam-dev iptables-dev libselinux-dev binutils-dev libunwind-dev
 			  ruby py3-setuptools py3-build py3-tox"
 		# musl does not provide backtrace(), so use libunwind
@@ -324,8 +297,6 @@ all|alpine|codeql|coverage|sonarcloud|no-dbg|no-testable-ke)
 		CONFIG="$CONFIG --disable-systemd --disable-cert-enroll-timer"
 		# no TrouSerS either
 		CONFIG="$CONFIG --disable-tss-trousers --disable-aikgen"
-		# and no Clearsilver
-		CONFIG="$CONFIG --disable-fast --disable-manager --disable-medsrv"
 	fi
 	if test "$1" = "build-deps"; then
 		build_botan
@@ -342,37 +313,55 @@ win*)
 			--enable-eap-tnc --enable-eap-ttls --enable-eap-identity
 			--enable-eap-radius
 			--enable-updown --enable-ext-auth --enable-libipsec --enable-pkcs11
-			--enable-tnccs-20 --enable-imc-attestation --enable-imv-attestation
-			--enable-imc-os --enable-imv-os --enable-tnc-imv --enable-tnc-imc
+			--enable-tnccs-20
 			--enable-pki --enable-swanctl --enable-socket-win
 			--enable-kernel-iph --enable-kernel-wfp --enable-winhttp"
-	# no make check for Windows binaries unless we run on a windows host
-	if test "$APPVEYOR" != "True"; then
-		TARGET=
-	else
-		CONFIG="$CONFIG --enable-openssl"
+	# on AppVeyor we only build against old OpenSSL versions
+	if test "$APPVEYOR" = "True"; then
+		CONFIG="--disable-defaults  --enable-static --enable-pki --enable-openssl --enable-pem --enable-drbg"
 		CFLAGS="$CFLAGS -I$OPENSSL_DIR/include"
-		LDFLAGS="-L$OPENSSL_DIR/lib"
+		LDFLAGS="-L$OPENSSL_DIR/lib -fuse-ld=lld"
 		case "$IMG" in
-		2015)
+		2017)
 			# gcc/ld might be too old to find libeay32 via .lib instead of .dll
 			LDFLAGS="-L$OPENSSL_DIR"
 			;;
 		esac
 		export LDFLAGS
+	# no make check for Windows binaries unless we run on a Windows host
+	# building natively is slow, so don't build libimcv to save several minutes
+	elif test "$OS_NAME" != "windows"; then
+		TARGET=
+		CONFIG="$CONFIG --enable-imc-attestation --enable-imv-attestation
+				--enable-imc-os --enable-imv-os --enable-tnc-imv --enable-tnc-imc"
+		DEPS="gcc-mingw-w64-base"
+		case "$TEST" in
+		win64)
+			DEPS="gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 mingw-w64-x86-64-dev $DEPS"
+			;;
+		win32)
+			DEPS="gcc-mingw-w64-i686 binutils-mingw-w64-i686 mingw-w64-i686-dev $DEPS"
+			;;
+		esac
+	else
+		CONFIG="$CONFIG --enable-openssl --enable-drbg"
+		DEPS="base-devel git autotools gperf"
+		case "$TEST" in
+		win64)
+			DEPS="$DEPS mingw-w64-x86_64-toolchain"
+			;;
+		win32)
+			DEPS="$DEPS mingw-w64-i686-toolchain"
+			;;
+		esac
 	fi
 	CFLAGS="$CFLAGS -mno-ms-bitfields"
-	DEPS="gcc-mingw-w64-base"
 	case "$TEST" in
 	win64)
 		CONFIG="--host=x86_64-w64-mingw32 $CONFIG --enable-dbghelp-backtraces"
-		DEPS="gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 mingw-w64-x86-64-dev $DEPS"
-		CC="x86_64-w64-mingw32-gcc"
 		;;
 	win32)
 		CONFIG="--host=i686-w64-mingw32 $CONFIG"
-		DEPS="gcc-mingw-w64-i686 binutils-mingw-w64-i686 mingw-w64-i686-dev $DEPS"
-		CC="i686-w64-mingw32-gcc"
 		;;
 	esac
 	;;
@@ -411,13 +400,12 @@ macos)
 	export LDFLAGS
 	;;
 freebsd)
-	# use the options of the FreeBSD port (including options), except smp,
-	# which requires a patch but is deprecated anyway, only using the builtin
-	# printf hooks
+	# use the options of the FreeBSD port (including options),
+	# only using the builtin printf hooks
 	CONFIG="--enable-kernel-pfkey --enable-kernel-pfroute --disable-scripts
 			--disable-kernel-netlink --enable-openssl --enable-eap-identity
 			--enable-eap-md5 --enable-eap-tls --enable-eap-mschapv2
-			--enable-eap-peap --enable-eap-ttls --enable-md4 --enable-blowfish
+			--enable-eap-peap --enable-eap-ttls --enable-md4
 			--enable-addrblock --enable-whitelist --enable-cmd --enable-curl
 			--enable-eap-aka --enable-eap-aka-3gpp2 --enable-eap-dynamic
 			--enable-eap-radius --enable-eap-sim --enable-eap-sim-file
@@ -427,12 +415,14 @@ freebsd)
 			--enable-unbound --enable-unity --enable-xauth-eap --enable-xauth-pam
 			--with-printf-hooks=builtin --enable-attr-sql --enable-sql
 			--enable-farp"
-	DEPS="git gmp libxml2 mysql80-client sqlite3 unbound ldns tpm2-tss"
+	DEPS="git gmp mysql80-client sqlite3 unbound ldns tpm2-tss"
 	;;
 fuzzing)
 	CFLAGS="$CFLAGS -DNO_CHECK_MEMWIPE"
 	CONFIG="--enable-fuzzing --enable-static --disable-shared --disable-scripts
-			--enable-imc-test --enable-tnccs-20"
+			--enable-imc-test --enable-tnccs-20 --enable-eap-radius"
+	# enable the custom crypto plugins
+	CONFIG="$CONFIG --enable-sha1 --enable-sha2 --enable-sha3 --enable-mgf1 --enable-gmp"
 	# don't run any of the unit tests
 	export TESTS_RUNNERS=
 	# prepare corpora
@@ -494,6 +484,9 @@ deps)
 		pkg install -y automake autoconf libtool pkgconf && \
 		pkg install -y bison flex gperf $DEPS
 		;;
+	windows)
+		pacman --noconfirm -S --needed $DEPS
+		;;
 	esac
 	exit $?
 	;;
@@ -532,6 +525,7 @@ if [ ! -f ./configure ]; then
 fi
 
 cd $BUILD_DIR
+echo "$ LDFLAGS=\"$LDFLAGS\""
 echo "$ CC=$CC CFLAGS=\"$CFLAGS\" ./configure $CONFIG"
 CC="$CC" CFLAGS="$CFLAGS" $SRC_DIR/configure $CONFIG || exit $?
 
@@ -543,15 +537,15 @@ apidoc)
 	;;
 esac
 
-echo "$ make $TARGET"
+echo "$ make -j$NPROC $TARGET"
 case "$TEST" in
 sonarcloud)
 	# without target, coverage is currently not supported anyway because
 	# sonarqube only supports gcov, not lcov
-	build-wrapper-linux-x86-64 --out-dir $BUILD_WRAPPER_OUT_DIR make -j$(nproc) || exit $?
+	build-wrapper-linux-x86-64 --out-dir $BUILD_WRAPPER_OUT_DIR make -j$NPROC || exit $?
 	;;
 *)
-	make -j$(nproc) $TARGET || exit $?
+	make -j$NPROC $TARGET || exit $?
 	;;
 esac
 

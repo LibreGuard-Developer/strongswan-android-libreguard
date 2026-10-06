@@ -36,8 +36,8 @@ fuzzing-corpora/
 *.orig
 *.patch
 *.diff
-*.tar.bz2
-*.tar.gz
+*.tar.bz2*
+*.tar.gz*
 .DS_Store
 ._.DS_Store
 coverage/
@@ -60,3 +60,5 @@ nbproject/
 # Local diagnostic artifacts
 /gcm-diagnose.log
 
+.cache/clangd
+compile_commands.json

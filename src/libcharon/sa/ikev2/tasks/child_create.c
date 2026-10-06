@@ -864,7 +864,7 @@ static status_t install_child_sa(private_child_create_t *this)
 	other_ts = linked_list_create_from_enumerator(
 				this->child_sa->create_ts_enumerator(this->child_sa, FALSE));
 
-	DBG0(DBG_IKE, "%sCHILD_SA %s{%d} established "
+	DBG0(DBG_IKE, "%sCHILD_SA %s{%u} established "
 		 "with SPIs %.8x_i %.8x_o and TS %#R === %#R",
 		 (out_state == CHILD_OUTBOUND_INSTALLED) ? "" : "inbound ",
 		 this->child_sa->get_name(this->child_sa),
@@ -1587,8 +1587,8 @@ static bool check_for_duplicate(private_child_create_t *this)
 		other_ts = linked_list_create_from_enumerator(
 					found->create_ts_enumerator(found, FALSE));
 
-		DBG1(DBG_IKE, "not establishing CHILD_SA %s{%d} due to existing "
-			 "duplicate {%d} with SPIs %.8x_i %.8x_o and TS %#R === %#R",
+		DBG1(DBG_IKE, "not establishing CHILD_SA %s{%u} due to existing "
+			 "duplicate {%u} with SPIs %.8x_i %.8x_o and TS %#R === %#R",
 			 this->child_sa->get_name(this->child_sa),
 			 this->child_sa->get_unique_id(this->child_sa),
 			 found->get_unique_id(found),
@@ -1611,7 +1611,7 @@ static bool check_for_generic_label(private_child_create_t *this)
 	{
 #if DEBUG_LEVEL >= 1
 		sec_label_t *label = this->config->get_label(this->config);
-		DBG1(DBG_IKE, "not establishing CHILD_SA %s{%d} with generic "
+		DBG1(DBG_IKE, "not establishing CHILD_SA %s{%u} with generic "
 			 "label '%s'", this->child_sa->get_name(this->child_sa),
 			 this->child_sa->get_unique_id(this->child_sa),
 			 label->get_string(label));
@@ -1768,7 +1768,7 @@ METHOD(task_t, build_i, status_t,
 													   OPT_PER_CPU_SAS);
 	}
 
-	this->proposals = this->config->get_proposals(this->config, no_ke);
+	this->proposals = this->config->get_proposals(this->config, no_ke, TRUE);
 	this->mode = this->config->get_mode(this->config);
 
 	this->child.if_id_in_def = this->ike_sa->get_if_id(this->ike_sa, TRUE);
@@ -1790,13 +1790,13 @@ METHOD(task_t, build_i, status_t,
 
 	if (this->child.reqid)
 	{
-		DBG0(DBG_IKE, "establishing CHILD_SA %s{%d} reqid %d",
+		DBG0(DBG_IKE, "establishing CHILD_SA %s{%u} reqid %d",
 			 this->child_sa->get_name(this->child_sa),
 			 this->child_sa->get_unique_id(this->child_sa), this->child.reqid);
 	}
 	else
 	{
-		DBG0(DBG_IKE, "establishing CHILD_SA %s{%d}",
+		DBG0(DBG_IKE, "establishing CHILD_SA %s{%u}",
 			 this->child_sa->get_name(this->child_sa),
 			 this->child_sa->get_unique_id(this->child_sa));
 	}
@@ -2226,13 +2226,13 @@ static bool key_exchange_done_and_install_r(private_child_create_t *this,
 			case SUCCESS:
 				break;
 			case NOT_FOUND:
-				message->add_notify(message, TRUE, TS_UNACCEPTABLE,
+				message->add_notify(message, FALSE, TS_UNACCEPTABLE,
 									chunk_empty);
 				handle_child_sa_failure(this, message);
 				return TRUE;
 			case FAILED:
 			default:
-				message->add_notify(message, TRUE, NO_PROPOSAL_CHOSEN,
+				message->add_notify(message, FALSE, NO_PROPOSAL_CHOSEN,
 									chunk_empty);
 				handle_child_sa_failure(this, message);
 				return TRUE;
@@ -2486,7 +2486,7 @@ static void raise_alerts(private_child_create_t *this, notify_type_t type)
 	switch (type)
 	{
 		case NO_PROPOSAL_CHOSEN:
-			list = this->config->get_proposals(this->config, FALSE);
+			list = this->config->get_proposals(this->config, FALSE, FALSE);
 			charon->bus->alert(charon->bus, ALERT_PROPOSAL_MISMATCH_CHILD, list);
 			list->destroy_offset(list, offsetof(proposal_t, destroy));
 			break;
@@ -2712,6 +2712,13 @@ METHOD(task_t, process_i, status_t,
 
 	process_payloads(this, message);
 
+	if (!this->tsi || !this->tsr)
+	{
+		DBG1(DBG_IKE, "TS payloads missing in message");
+		handle_child_sa_failure(this, message);
+		return delete_failed_sa(this);
+	}
+
 	if (!select_proposal(this, no_ke))
 	{
 		handle_child_sa_failure(this, message);
@@ -2723,7 +2730,7 @@ METHOD(task_t, process_i, status_t,
 
 	if (this->aborted)
 	{
-		DBG1(DBG_IKE, "deleting CHILD_SA %s{%d} with SPIs %.8x_i %.8x_o of "
+		DBG1(DBG_IKE, "deleting CHILD_SA %s{%u} with SPIs %.8x_i %.8x_o of "
 			 "aborted %N task",
 			 this->child_sa->get_name(this->child_sa),
 			 this->child_sa->get_unique_id(this->child_sa),
@@ -2950,8 +2957,7 @@ METHOD(child_create_t, get_config, child_cfg_t*,
 METHOD(child_create_t, get_lower_nonce, chunk_t,
 	private_child_create_t *this)
 {
-	if (memcmp(this->my_nonce.ptr, this->other_nonce.ptr,
-			   min(this->my_nonce.len, this->other_nonce.len)) < 0)
+	if (chunk_compare_prefix(this->my_nonce, this->other_nonce) < 0)
 	{
 		return this->my_nonce;
 	}

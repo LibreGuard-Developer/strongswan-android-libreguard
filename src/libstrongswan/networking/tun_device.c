@@ -159,6 +159,7 @@ static bool set_address_v4(private_tun_device_t *this, host_t *addr,
 static bool set_address_v6(private_tun_device_t *this, host_t *addr,
 						   uint8_t netmask)
 {
+	struct sockaddr_in6 *sin6;
 	struct in6_ifreq ifr6 = {0};
 	struct ifreq ifr = {0};
 
@@ -170,8 +171,8 @@ static bool set_address_v6(private_tun_device_t *this, host_t *addr,
 		return FALSE;
 	}
 
-	memcpy(&ifr6.ifr6_addr, addr->get_sockaddr(addr),
-		   *addr->get_sockaddr_len(addr));
+	sin6 = (struct sockaddr_in6*)addr->get_sockaddr(addr);
+	memcpy(&ifr6.ifr6_addr, &sin6->sin6_addr, sizeof(ifr6.ifr6_addr));
 	ifr6.ifr6_prefixlen = netmask;
 	ifr6.ifr6_ifindex = ifr.ifr_ifindex;
 	if (ioctl(this->sock_v6, SIOCSIFADDR, &ifr6) < 0)
@@ -500,6 +501,10 @@ METHOD(tun_device_t, destroy, void,
 	{
 		close(this->sock);
 	}
+	if (this->sock_v6 > 0)
+	{
+		close(this->sock_v6);
+	}
 	DESTROY_IF(this->address);
 	free(this);
 }
@@ -650,6 +655,7 @@ tun_device_t *tun_device_create(const char *name_tmpl)
 		},
 		.tunfd = -1,
 		.sock = -1,
+		.sock_v6 = -1,
 	);
 
 	if (!init_tun(this, name_tmpl))

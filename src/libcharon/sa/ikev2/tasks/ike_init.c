@@ -192,7 +192,6 @@ static void send_supported_hash_algorithms(private_ike_init_t *this,
 	size_t len = BUF_LEN;
 	char buf[len];
 	char *pos = buf;
-	char *plugin_name;
 
 	algos = hash_algorithm_set_create();
 	peer = this->ike_sa->get_peer_cfg(this->ike_sa);
@@ -221,13 +220,10 @@ static void send_supported_hash_algorithms(private_ike_init_t *this,
 
 	if (!algos->count(algos))
 	{
-		enumerator = lib->crypto->create_hasher_enumerator(lib->crypto);
-		while (enumerator->enumerate(enumerator, &hash, &plugin_name))
+		enumerator = this->keymat->hash_algorithm_enumerator_create(this->keymat);
+		while (enumerator->enumerate(enumerator, &hash))
 		{
-			if (hasher_algorithm_for_ikev2(hash))
-			{
-				algos->add(algos, hash);
-			}
+			algos->add(algos, hash);
 		}
 		enumerator->destroy(enumerator);
 	}
@@ -336,6 +332,17 @@ static bool send_use_ppk(private_ike_init_t *this)
 }
 
 /**
+ * Check that we are either initiator or we respond to one that supports the
+ * given extension.
+ */
+static inline bool initiator_or_extension(private_ike_init_t *this,
+										  ike_extension_t ext)
+{
+	return this->initiator ||
+		   this->ike_sa->supports_extension(this->ike_sa, ext);
+}
+
+/**
  * build the payloads for the message
  */
 static bool build_payloads(private_ike_init_t *this, message_t *message)
@@ -356,7 +363,7 @@ static bool build_payloads(private_ike_init_t *this, message_t *message)
 
 	if (this->initiator)
 	{
-		proposal_list = ike_cfg->get_proposals(ike_cfg);
+		proposal_list = ike_cfg->get_proposals(ike_cfg, TRUE);
 		other_ke_methods = linked_list_create();
 		enumerator = proposal_list->create_enumerator(proposal_list);
 		while (enumerator->enumerate(enumerator, (void**)&proposal))
@@ -414,30 +421,26 @@ static bool build_payloads(private_ike_init_t *this, message_t *message)
 	nonce_payload->set_nonce(nonce_payload, this->my_nonce);
 	message->add_payload(message, (payload_t*)nonce_payload);
 
-	/* negotiate fragmentation if we are not rekeying */
-	if (!this->old_sa &&
-		 ike_cfg->fragmentation(ike_cfg) != FRAGMENTATION_NO)
+	/* if we are rekeying, we are done as we don't negotiate any extensions */
+	if (this->old_sa)
 	{
-		if (this->initiator ||
-			this->ike_sa->supports_extension(this->ike_sa,
-											 EXT_IKE_FRAGMENTATION))
-		{
-			message->add_notify(message, FALSE, FRAGMENTATION_SUPPORTED,
-								chunk_empty);
-		}
+		return TRUE;
+	}
+
+	if (ike_cfg->fragmentation(ike_cfg) != FRAGMENTATION_NO &&
+		initiator_or_extension(this, EXT_IKE_FRAGMENTATION))
+	{
+		message->add_notify(message, FALSE, FRAGMENTATION_SUPPORTED,
+							chunk_empty);
 	}
 	/* submit supported hash algorithms for signature authentication */
-	if (!this->old_sa && this->signature_authentication)
+	if (this->signature_authentication &&
+		initiator_or_extension(this, EXT_SIGNATURE_AUTH))
 	{
-		if (this->initiator ||
-			this->ike_sa->supports_extension(this->ike_sa,
-											 EXT_SIGNATURE_AUTH))
-		{
-			send_supported_hash_algorithms(this, message);
-		}
+		send_supported_hash_algorithms(this, message);
 	}
 	/* notify other peer if we support redirection */
-	if (!this->old_sa && this->initiator && this->follow_redirects)
+	if (this->initiator && this->follow_redirects)
 	{
 		identification_t *gateway;
 		host_t *from;
@@ -460,26 +463,21 @@ static bool build_payloads(private_ike_init_t *this, message_t *message)
 		}
 	}
 	/* notify the peer if we want to use/support PPK */
-	if (!this->old_sa && send_use_ppk(this))
+	if (send_use_ppk(this))
 	{
 		message->add_notify(message, FALSE, USE_PPK, chunk_empty);
 	}
-	/* notify the peer if we accept childless IKE_SAs */
-	if (!this->old_sa && !this->initiator &&
-		 ike_cfg->childless(ike_cfg) != CHILDLESS_NEVER)
+	/* notify the initiator if we accept childless IKE_SAs */
+	if (!this->initiator && ike_cfg->childless(ike_cfg) != CHILDLESS_NEVER)
 	{
 		message->add_notify(message, FALSE, CHILDLESS_IKEV2_SUPPORTED,
 							chunk_empty);
 	}
-	if (!this->old_sa && additional_ke)
+	if (additional_ke &&
+		initiator_or_extension(this, EXT_IKE_INTERMEDIATE))
 	{
-		if (this->initiator ||
-			this->ike_sa->supports_extension(this->ike_sa,
-											 EXT_IKE_INTERMEDIATE))
-		{
-			message->add_notify(message, FALSE, INTERMEDIATE_EXCHANGE_SUPPORTED,
-								chunk_empty);
-		}
+		message->add_notify(message, FALSE, INTERMEDIATE_EXCHANGE_SUPPORTED,
+							chunk_empty);
 	}
 	return TRUE;
 }
@@ -598,14 +596,7 @@ static bool additional_key_exchange_required(private_ike_init_t *this)
  */
 static void clear_key_exchanges(private_ike_init_t *this)
 {
-	int i;
-
-	for (i = 0; i < MAX_KEY_EXCHANGES; i++)
-	{
-		this->key_exchanges[i].type = 0;
-		this->key_exchanges[i].method = 0;
-		this->key_exchanges[i].done = FALSE;
-	}
+	memset(this->key_exchanges, 0, sizeof(this->key_exchanges));
 	this->ke_index = 0;
 
 	array_destroy_offset(this->kes, offsetof(key_exchange_t, destroy));
@@ -835,7 +826,7 @@ METHOD(task_t, build_i, status_t,
 
 	ike_cfg = this->ike_sa->get_ike_cfg(this->ike_sa);
 
-	DBG0(DBG_IKE, "initiating IKE_SA %s[%d] to %H",
+	DBG0(DBG_IKE, "initiating IKE_SA %s[%u] to %H",
 		 this->ike_sa->get_name(this->ike_sa),
 		 this->ike_sa->get_unique_id(this->ike_sa),
 		 this->ike_sa->get_other_host(this->ike_sa));
@@ -944,6 +935,7 @@ static void process_payloads_multi_ke(private_ike_init_t *this,
 	else
 	{
 		DBG1(DBG_IKE, "KE payload missing in message");
+		this->ke_failed = TRUE;
 	}
 }
 
@@ -960,7 +952,9 @@ METHOD(task_t, process_r_multi_ke, status_t,
 METHOD(task_t, process_r,  status_t,
 	private_ike_init_t *this, message_t *message)
 {
-	DBG0(DBG_IKE, "%H is initiating an IKE_SA", message->get_source(message));
+	DBG0(DBG_IKE, "%H is initiating IKE_SA %s[%u]",
+		 message->get_source(message), this->ike_sa->get_name(this->ike_sa),
+		 this->ike_sa->get_unique_id(this->ike_sa));
 	this->ike_sa->set_state(this->ike_sa, IKE_CONNECTING);
 
 	if (!generate_nonce(this))
@@ -1002,10 +996,6 @@ static bool derive_keys_internal(private_ike_init_t *this, chunk_t nonce_i,
 
 	if (this->old_sa)
 	{
-		if (additional_key_exchange_required(this))
-		{	/* when rekeying, we only derive keys once all exchanges are done */
-			return FALSE;
-		}
 		old_sa = this->old_sa;
 		kes = this->kes;
 	}
@@ -1014,6 +1004,7 @@ static bool derive_keys_internal(private_ike_init_t *this, chunk_t nonce_i,
 		 * our own SA as old SA to get SK_d */
 		old_sa = this->ike_sa;
 		array_insert_create(&kes, ARRAY_HEAD, this->ke);
+		this->ke = NULL;
 	}
 
 	id = this->ike_sa->get_id(this->ike_sa);
@@ -1029,7 +1020,7 @@ static bool derive_keys_internal(private_ike_init_t *this, chunk_t nonce_i,
 	}
 	if (kes != this->kes)
 	{
-		array_destroy(kes);
+		array_destroy_offset(kes, offsetof(key_exchange_t, destroy));
 	}
 	return success;
 }
@@ -1222,7 +1213,7 @@ static void raise_alerts(private_ike_init_t *this, notify_type_t type)
 	{
 		case NO_PROPOSAL_CHOSEN:
 			ike_cfg = this->ike_sa->get_ike_cfg(this->ike_sa);
-			list = ike_cfg->get_proposals(ike_cfg);
+			list = ike_cfg->get_proposals(ike_cfg, FALSE);
 			charon->bus->alert(charon->bus, ALERT_PROPOSAL_MISMATCH_IKE, list);
 			list->destroy_offset(list, offsetof(proposal_t, destroy));
 			break;
@@ -1498,8 +1489,7 @@ METHOD(task_t, destroy, void,
 METHOD(ike_init_t, get_lower_nonce, chunk_t,
 	private_ike_init_t *this)
 {
-	if (memcmp(this->my_nonce.ptr, this->other_nonce.ptr,
-			   min(this->my_nonce.len, this->other_nonce.len)) < 0)
+	if (chunk_compare_prefix(this->my_nonce, this->other_nonce) < 0)
 	{
 		return this->my_nonce;
 	}

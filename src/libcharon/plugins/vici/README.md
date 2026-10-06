@@ -776,12 +776,15 @@ command.
 			nat-any = <yes, if any endpoint is behind a NAT (also if faked)>
 			if-id-in = <hex encoded default inbound XFRM interface ID>
 			if-id-out = <hex encoded default outbound XFRM interface ID>
-			encr-alg = <IKE encryption algorithm string>
+			encr-alg = <IKE encryption algorithm name>
 			encr-keysize = <key size for encr-alg, if applicable>
-			integ-alg = <IKE integrity algorithm string>
+			integ-alg = <IKE integrity algorithm name>
 			integ-keysize = <key size for encr-alg, if applicable>
-			prf-alg = <IKE pseudo random function string>
-			dh-group = <IKE Diffie-Hellman group string>
+			prf-alg = <IKE pseudo random function name>
+			dh-group = <IKE key exchange method name>
+			ake1 = <first additional IKE key exchange method name, if any>
+			...
+			ake7 = <seventh additional IKE key exchange method name, if any>
 			established = <seconds the IKE_SA has been established>
 			rekey-time = <seconds before IKE_SA gets rekeyed>
 			reauth-time = <seconds before IKE_SA gets re-authenticated>
@@ -827,7 +830,10 @@ command.
 					integ-alg = <ESP or AH integrity algorithm name, if any>
 					integ-keysize = <ESP or AH integrity key size, if applicable>
 					prf-alg = <CHILD_SA pseudo random function name>
-					dh-group = <CHILD_SA PFS rekeying DH group name, if any>
+					dh-group = <CHILD_SA key exchange method name, if any>
+					ake1 = <first additional CHILD_SA key exchange method name, if any>
+					...
+					ake7 = <seventh additional CHILD_SA key exchange method name, if any>
 					esn = <1 if using extended sequence numbers>
 					bytes-in = <number of input bytes processed>
 					packets-in = <number of input packets processed>
@@ -887,7 +893,18 @@ _list-conns_ command.
 			version = <IKE version as string, IKEv1|IKEv2 or 0 for any>
 			reauth_time = <IKE_SA reauthentication interval in seconds>
 			rekey_time = <IKE_SA rekeying interval in seconds>
-
+			proposals = { # numbered (zero-based) sub-sections for IKE proposal
+				<num> = { # lists with NAME[_KEYSIZE] for each transform type in proposal
+					encr = [ <list of encryption algorithms> ]
+					integ = [ <list of integrity algorithms> ]
+					prf = [ <list of pseudo random functions> ]
+					ke = [ <list of key exchange methods> ]
+					ake1 = [ <list of first additional key exchange methods> ]
+					...
+					ake7 = [ <list fo seventh additional key exchange methods> ]
+					sn = [ <list of sequence number transforms> ]
+				}
+			}
 			local*, remote* = { # multiple local and remote auth sections
 				class = <authentication type>
 				eap-type = <EAP type to authenticate if when using EAP>
@@ -915,6 +932,12 @@ _list-conns_ command.
 					rekey_time = <CHILD_SA rekeying interval in seconds>
 					rekey_bytes = <CHILD_SA rekeying interval in bytes>
 					rekey_packets = <CHILD_SA rekeying interval in packets>
+					esp_proposals = {
+						<sub-sections for ESP proposals, see above for details>
+					}
+					ah_proposals = {
+						<sub-sections for AH proposals, see above for details>
+					}
 					local-ts = [
 						<list of local traffic selectors>
 					]

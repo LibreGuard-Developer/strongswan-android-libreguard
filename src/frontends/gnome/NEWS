@@ -1,3 +1,18 @@
+NetworkManager-strongswan-1.6.6
+-------------------------------
+
+- Reverted one of the changes that was added with 1.6.4
+
+NetworkManager-strongswan-1.6.5
+-------------------------------
+
+- Add Georgian translation
+
+NetworkManager-strongswan-1.6.4
+-------------------------------
+
+- Fixes regarding CVE-2025-9615
+
 NetworkManager-strongswan-1.6.3
 -------------------------------
 

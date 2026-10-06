@@ -344,7 +344,6 @@ static status_t process_client_hello(private_tls_server_t *this,
 	key_share_t peer = {0};
 	chunk_t extension_data = chunk_empty;
 	bio_reader_t *extensions, *extension;
-	tls_cipher_suite_t *suites;
 	tls_version_t original_version_max;
 	int count, i;
 	rng_t *rng;
@@ -471,15 +470,12 @@ static status_t process_client_hello(private_tls_server_t *this,
 		bio_reader_t *client_versions;
 
 		client_versions = bio_reader_create(versions);
-		while (client_versions->remaining(client_versions))
+		while (client_versions->read_uint16(client_versions, &version))
 		{
-			if (client_versions->read_uint16(client_versions, &version))
+			if (this->tls->set_version(this->tls, version, version))
 			{
-				if (this->tls->set_version(this->tls, version, version))
-				{
-					this->client_version = version;
-					break;
-				}
+				this->client_version = version;
+				break;
 			}
 		}
 		client_versions->destroy(client_versions);
@@ -534,9 +530,10 @@ static status_t process_client_hello(private_tls_server_t *this,
 	else
 	{
 		tls_cipher_suite_t original_suite = this->suite;
+		tls_cipher_suite_t *suites;
 
 		count = ciphers.len / sizeof(uint16_t);
-		suites = alloca(count * sizeof(tls_cipher_suite_t));
+		suites = malloc(count * sizeof(tls_cipher_suite_t));
 		DBG2(DBG_TLS, "received %d TLS cipher suites:", count);
 		for (i = 0; i < count; i++)
 		{
@@ -546,8 +543,10 @@ static status_t process_client_hello(private_tls_server_t *this,
 		if (!select_suite_and_key(this, suites, count))
 		{
 			this->alert->add(this->alert, TLS_FATAL, TLS_HANDSHAKE_FAILURE);
+			free(suites);
 			return NEED_MORE;
 		}
+		free(suites);
 		if (retrying(this) && original_suite != this->suite)
 		{
 			DBG1(DBG_TLS, "selected %N instead of %N during retry",
@@ -722,6 +721,7 @@ static status_t process_certificate(private_tls_server_t *this,
 			this->alert->add(this->alert, TLS_FATAL,
 							 this->tls->get_version_max(this->tls) > TLS_1_2 ?
 							 TLS_CERTIFICATE_REQUIRED : TLS_HANDSHAKE_FAILURE);
+			certs->destroy(certs);
 			return NEED_MORE;
 		}
 	}
@@ -770,6 +770,7 @@ static status_t process_certificate(private_tls_server_t *this,
 			{
 				DBG1(DBG_TLS, "failed to read extensions of CertificateEntry");
 				this->alert->add(this->alert, TLS_FATAL, TLS_DECODE_ERROR);
+				certs->destroy(certs);
 				return NEED_MORE;
 			}
 		}
@@ -860,7 +861,7 @@ static status_t process_key_exchange_dhe(private_tls_server_t *this,
 	group = this->dh->get_method(this->dh);
 	ec = key_exchange_is_ecdh(group);
 	if ((ec && !reader->read_data8(reader, &pub)) ||
-		(!ec && (!reader->read_data16(reader, &pub) || pub.len == 0)))
+		(!ec && !reader->read_data16(reader, &pub)) || pub.len == 0)
 	{
 		DBG1(DBG_TLS, "received invalid Client Key Exchange");
 		this->alert->add(this->alert, TLS_FATAL, TLS_DECODE_ERROR);
@@ -959,7 +960,7 @@ static status_t process_cert_verify(private_tls_server_t *this,
 static status_t process_finished(private_tls_server_t *this,
 								 bio_reader_t *reader)
 {
-	chunk_t received, verify_data;
+	chunk_t received, verify_data = chunk_empty;
 	u_char buf[12];
 
 	if (this->tls->get_version_max(this->tls) < TLS_1_3)
@@ -986,25 +987,26 @@ static status_t process_finished(private_tls_server_t *this,
 		{
 			DBG1(DBG_TLS, "calculating client finished failed");
 			this->alert->add(this->alert, TLS_FATAL, TLS_INTERNAL_ERROR);
-			return NEED_MORE;
+			goto out;
 		}
 		this->crypto->change_cipher(this->crypto, TRUE);
 	}
 
-	if (!chunk_equals_const(received, verify_data))
+	if (!chunk_equals_const(verify_data, received))
 	{
 		DBG1(DBG_TLS, "received client finished invalid");
 		this->alert->add(this->alert, TLS_FATAL, TLS_DECRYPT_ERROR);
-		return NEED_MORE;
-	}
-
-	if (verify_data.ptr != buf)
-	{
-		chunk_free(&verify_data);
+		goto out;
 	}
 
 	this->crypto->append_handshake(this->crypto, TLS_FINISHED, received);
 	this->state = STATE_FINISHED_RECEIVED;
+
+out:
+	if (verify_data.ptr && verify_data.ptr != buf)
+	{
+		chunk_free(&verify_data);
+	}
 	return NEED_MORE;
 }
 

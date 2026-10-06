@@ -138,7 +138,8 @@ utils/parser_helper.h utils/test.h utils/integrity_checker.h utils/process.h \
 utils/utils/strerror.h utils/compat/windows.h utils/compat/apple.h utils/compat/android.h \
 utils/utils/atomics.h utils/utils/types.h utils/utils/byteorder.h \
 utils/utils/string.h utils/utils/memory.h utils/utils/tty.h utils/utils/path.h \
-utils/utils/status.h utils/utils/object.h utils/utils/time.h utils/utils/align.h
+utils/utils/status.h utils/utils/object.h utils/utils/time.h utils/utils/align.h \
+utils/utils/constant_time.h
 if USE_VM_SOCKETS
   nobase_strongswan_include_HEADERS += \
     networking/streams/stream_vsock.h \
@@ -284,13 +285,6 @@ endif
 # build plugins with their own Makefile
 #######################################
 
-if USE_AF_ALG
-  SUBDIRS += plugins/af_alg
-if MONOLITHIC
-  libstrongswan_la_LIBADD += plugins/af_alg/libstrongswan-af-alg.la
-endif
-endif
-
 if USE_AES
   SUBDIRS += plugins/aes
 if MONOLITHIC
@@ -302,13 +296,6 @@ if USE_DES
   SUBDIRS += plugins/des
 if MONOLITHIC
   libstrongswan_la_LIBADD += plugins/des/libstrongswan-des.la
-endif
-endif
-
-if USE_BLOWFISH
-  SUBDIRS += plugins/blowfish
-if MONOLITHIC
-  libstrongswan_la_LIBADD += plugins/blowfish/libstrongswan-blowfish.la
 endif
 endif
 
@@ -550,13 +537,6 @@ if MONOLITHIC
 endif
 endif
 
-if USE_SOUP
-  SUBDIRS += plugins/soup
-if MONOLITHIC
-  libstrongswan_la_LIBADD += plugins/soup/libstrongswan-soup.la
-endif
-endif
-
 if USE_LDAP
   SUBDIRS += plugins/ldap
 if MONOLITHIC
@@ -578,13 +558,6 @@ if MONOLITHIC
 endif
 endif
 
-if USE_PADLOCK
-  SUBDIRS += plugins/padlock
-if MONOLITHIC
-  libstrongswan_la_LIBADD += plugins/padlock/libstrongswan-padlock.la
-endif
-endif
-
 if USE_OPENSSL
   SUBDIRS += plugins/openssl
 if MONOLITHIC
@@ -596,13 +569,6 @@ if USE_WOLFSSL
   SUBDIRS += plugins/wolfssl
 if MONOLITHIC
   libstrongswan_la_LIBADD += plugins/wolfssl/libstrongswan-wolfssl.la
-endif
-endif
-
-if USE_GCRYPT
-  SUBDIRS += plugins/gcrypt
-if MONOLITHIC
-  libstrongswan_la_LIBADD += plugins/gcrypt/libstrongswan-gcrypt.la
 endif
 endif
 
@@ -624,13 +590,6 @@ if USE_AGENT
   SUBDIRS += plugins/agent
 if MONOLITHIC
   libstrongswan_la_LIBADD += plugins/agent/libstrongswan-agent.la
-endif
-endif
-
-if USE_KEYCHAIN
-  SUBDIRS += plugins/keychain
-if MONOLITHIC
-  libstrongswan_la_LIBADD += plugins/keychain/libstrongswan-keychain.la
 endif
 endif
 

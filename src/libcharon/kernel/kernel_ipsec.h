@@ -115,6 +115,8 @@ struct kernel_ipsec_add_sa_t {
 	dscp_copy_t copy_dscp;
 	/** TRUE if the peer doesn't support receiving fragments in AGGFRAG pkts */
 	bool iptfs_dont_frag;
+	/** Whether to automatically forward certain ICMP error messages */
+	bool forward_icmp;
 	/** TRUE if initiator of the exchange creating the SA */
 	bool initiator;
 	/** TRUE if this is an inbound SA */
@@ -127,6 +129,8 @@ struct kernel_ipsec_add_sa_t {
  * Data required to update the hosts of an SA in the kernel
  */
 struct kernel_ipsec_update_sa_t {
+	/** Mode (tunnel, transport...) */
+	ipsec_mode_t mode;
 	/** CPI in case IPComp is used */
 	uint16_t cpi;
 	/** New source address */
@@ -137,8 +141,20 @@ struct kernel_ipsec_update_sa_t {
 	bool encap;
 	/** TRUE to enable UDP encapsulation */
 	bool new_encap;
-	/** New reqid, or 0 if unchanged */
+	/** Old reqid */
+	uint32_t old_reqid;
+	/** New reqid, might be the same as old_reqid */
 	uint32_t new_reqid;
+	/** HW offload mode */
+	hw_offload_t hw_offload;
+	/** List of updated source traffic selectors */
+	linked_list_t *src_ts;
+	/** List of updated destination traffic selectors */
+	linked_list_t *dst_ts;
+	/** Network interface restricting policy */
+	char *interface;
+	/** TRUE if this is an inbound SA */
+	bool inbound;
 };
 
 /**
@@ -190,6 +206,8 @@ struct kernel_ipsec_manage_policy_t {
 	hw_offload_t hw_offload;
 	/** Enable per-CPU acquires */
 	bool pcpu_acquires;
+	/** Whether to automatically forward certain ICMP error messages */
+	bool forward_icmp;
 	/** Source address of the SA(s) tied to this policy */
 	host_t *src;
 	/** Destination address of the SA(s) tied to this policy */

@@ -158,14 +158,14 @@ static job_requeue_t check_systime(private_systime_fix_plugin_t *this)
 		}
 		DBG1(DBG_CFG, "timeout reached while waiting for valid system time, "
 			 "force rechecking certificates");
-		/* force regular lifetime checks for new connections */
-		lib->credmgr->remove_validator(lib->credmgr,
-									   &this->validator->validator);
 	}
 	else
 	{
 		DBG1(DBG_CFG, "system time got valid, rechecking certificates");
 	}
+	/* force regular lifetime checks for new connections */
+	lib->credmgr->remove_validator(lib->credmgr,
+								   &this->validator->validator);
 
 	enumerator = charon->ike_sa_manager->create_enumerator(
 												charon->ike_sa_manager, TRUE);
@@ -185,7 +185,7 @@ static job_requeue_t check_systime(private_systime_fix_plugin_t *this)
 				job = &delete_ike_sa_job_create(ike_sa->get_id(ike_sa),
 												TRUE)->job_interface;
 			}
-			DBG1(DBG_CFG, "%s[%d] has certificates not valid, %s IKE_SA",
+			DBG1(DBG_CFG, "%s[%u] has certificates not valid, %s IKE_SA",
 				 ike_sa->get_name(ike_sa), ike_sa->get_unique_id(ike_sa),
 				 action);
 			lib->processor->queue_job(lib->processor, job);

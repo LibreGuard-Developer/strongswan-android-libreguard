@@ -310,11 +310,30 @@ void array_insert_enumerator(array_t *array, int idx, enumerator_t *enumerator)
 	enumerator->destroy(enumerator);
 }
 
+/**
+ * Check if the given pointer points to an array element
+ */
+static bool is_in_array(array_t *array, void *ptr)
+{
+	return array->data && ptr >= array->data &&
+		   ptr < array->data + get_size(array, array->head + array->count +
+										array->tail);
+}
+
 void array_insert(array_t *array, int idx, void *data)
 {
 	if (idx < 0 || idx <= array_count(array))
 	{
-		void *pos;
+		void *buf, *pos, *src = data;
+
+		/* create a local copy if the source is another element in the array.
+		 * due to the resizing/moving, it might get invalid */
+		if (array->esize && is_in_array(array, data))
+		{
+			buf = alloca(array->esize);
+			memcpy(buf, data, array->esize);
+			src = buf;
+		}
 
 		if (idx < 0)
 		{
@@ -341,7 +360,7 @@ void array_insert(array_t *array, int idx, void *data)
 		pos = array->data + get_size(array, array->head + idx);
 		if (array->esize)
 		{
-			memcpy(pos, data, get_size(array, 1));
+			memcpy(pos, src, array->esize);
 		}
 		else
 		{
@@ -453,8 +472,12 @@ void array_sort(array_t *array, int (*cmp)(const void*,const void*,void*),
 		qsort_r(start, array->count, get_size(array, 1), &data,
 				compare_elements);
 #else /* !HAVE_QSORT_R */
+		sort_data_t *recursive;
+
+		recursive = sort_data->get(sort_data);
 		sort_data->set(sort_data, &data);
 		qsort(start, array->count, get_size(array, 1), compare_elements);
+		sort_data->set(sort_data, recursive);
 #endif
 	}
 }

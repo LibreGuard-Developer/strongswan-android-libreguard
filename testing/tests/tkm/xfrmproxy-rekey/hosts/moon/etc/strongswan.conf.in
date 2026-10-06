@@ -4,8 +4,22 @@ charon-tkm {
   # remove rekeyed inbound SA a bit quicker for the test scenario
   delete_rekeyed_delay = 2
   ke_mapping {
+    # modp3072
     15 = 1
+    # modp4096
     16 = 2
+  }
+  sig_mapping {
+    RSA_EMSA_PKCS1_SHA1 = 1
+    RSA_EMSA_PKCS1_SHA2_256 = 2
+  }
+  proposal_mapping {
+    ike {
+      1 = aes256-sha512-prfsha512
+    }
+    esp {
+      1 = aes256-sha512-esn-noesn
+    }
   }
   ca_mapping {
     strongswan_ca {

@@ -21,8 +21,6 @@
 #include <bio/bio_reader.h>
 #include <bio/bio_writer.h>
 
-#include <errno.h>
-
 typedef struct private_vici_message_t private_vici_message_t;
 
 /**
@@ -183,13 +181,17 @@ METHOD(enumerator_t, parse_enumerate, bool,
 			this->list = TRUE;
 			break;
 		case VICI_LIST_ITEM:
-			this->reader->read_data16(this->reader, value);
+			if (!this->reader->read_data16(this->reader, value))
+			{
+				DBG1(DBG_ENC, "invalid '%N' encoding", vici_type_names, type);
+				return FALSE;
+			}
 			break;
 		case VICI_LIST_END:
 			this->list = FALSE;
 			break;
 		case VICI_END:
-			return TRUE;
+			break;
 		default:
 			DBG1(DBG_ENC, "unknown encoding type: %u", type);
 			return FALSE;
@@ -350,7 +352,7 @@ METHOD(vici_message_t, vget_int, int,
 	chunk_t value;
 	bool found;
 	char buf[32], *pos;
-	int ret;
+	int32_t ret;
 
 	found = find_value(this, &value, fmt, args);
 	if (found)
@@ -362,9 +364,9 @@ METHOD(vici_message_t, vget_int, int,
 		if (chunk_printable(value, NULL, 0))
 		{
 			snprintf(buf, sizeof(buf), "%.*s", (int)value.len, value.ptr);
-			errno = 0;
-			ret = strtol(buf, &pos, 0);
-			if (errno == 0 && pos == buf + strlen(buf))
+
+			if (int32_from_string(buf, &pos, base_from_string(buf), &ret) &&
+				!*pos)
 			{
 				return ret;
 			}
@@ -659,6 +661,25 @@ METHOD(vici_message_t, destroy, void,
 	}
 	this->strings->destroy_function(this->strings, clear_strings);
 	free(this);
+}
+
+/**
+ * See header
+ */
+vici_message_t* vici_create_reply(const char *fmt, ...)
+{
+	vici_builder_t *builder;
+	va_list args;
+
+	builder = vici_builder_create();
+	builder->add_kv(builder, "success", fmt ? "no" : "yes");
+	if (fmt)
+	{
+		va_start(args, fmt);
+		builder->vadd_kv(builder, "errmsg", fmt, args);
+		va_end(args);
+	}
+	return builder->finalize(builder);
 }
 
 /**

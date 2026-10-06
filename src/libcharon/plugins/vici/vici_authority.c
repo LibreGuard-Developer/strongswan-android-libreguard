@@ -19,6 +19,7 @@
 
 #include "vici_authority.h"
 #include "vici_builder.h"
+#include "vici_parse_utils.h"
 
 #include <threading/rwlock.h>
 #include <collections/linked_list.h>
@@ -225,62 +226,6 @@ CALLBACK2(remove_cert, bool,
 }
 
 /**
- * Create a (error) reply message
- */
-static vici_message_t* create_reply(char *fmt, ...)
-{
-	vici_builder_t *builder;
-	va_list args;
-
-	builder = vici_builder_create();
-	builder->add_kv(builder, "success", fmt ? "no" : "yes");
-	if (fmt)
-	{
-		va_start(args, fmt);
-		builder->vadd_kv(builder, "errmsg", fmt, args);
-		va_end(args);
-	}
-	return builder->finalize(builder);
-}
-
-/**
- * A rule to parse a key/value or list item
- */
-typedef struct {
-	/** name of the key/value or list */
-	char *name;
-	/** function to parse value */
-	bool (*parse)(void *out, chunk_t value);
-	/** result, passed to parse() */
-	void *out;
-} parse_rule_t;
-
-/**
- * Parse key/values using a rule-set
- */
-static bool parse_rules(parse_rule_t *rules, int count, char *name,
-						chunk_t value, vici_message_t **reply)
-{
-	int i;
-
-	for (i = 0; i < count; i++)
-	{
-		if (streq(name, rules[i].name))
-		{
-			if (rules[i].parse(rules[i].out, value))
-			{
-				return TRUE;
-			}
-			*reply = create_reply("invalid value for: %s, authority discarded",
-								  name);
-			return FALSE;
-		}
-	}
-	*reply = create_reply("unknown option: %s, authority discarded", name);
-	return FALSE;
-}
-
-/**
  * Parse callback data, passed to each callback
  */
 typedef struct {
@@ -316,43 +261,6 @@ static void free_load_data(load_data_t *data)
 }
 
 /**
- * Parse a string
- */
-CALLBACK(parse_string, bool,
-	char **str, chunk_t v)
-{
-	if (!chunk_printable(v, NULL, ' '))
-	{
-		return FALSE;
-	}
-	*str = strndup(v.ptr, v.len);
-
-	return TRUE;
-}
-
-/**
- * Parse a uint32_t
- */
-CALLBACK(parse_uint32, bool,
-	uint32_t *out, chunk_t v)
-{
-	char buf[16], *end;
-	u_long l;
-
-	if (!vici_stringify(v, buf, sizeof(buf)))
-	{
-		return FALSE;
-	}
-	l = strtoul(buf, &end, 0);
-	if (*end == 0)
-	{
-		*out = l;
-		return TRUE;
-	}
-	return FALSE;
-}
-
-/**
  * Parse list of URIs
  */
 CALLBACK(parse_uris, bool,
@@ -383,16 +291,18 @@ CALLBACK(parse_cacert, bool,
 										  BUILD_BLOB_PEM, v, BUILD_END);
 	if (!cert)
 	{
-		return create_reply("parsing %N certificate failed",
-							certificate_type_names, CERT_X509);
+		return FALSE;
 	}
 	x509 = (x509_t*)cert;
 
 	if ((x509->get_flags(x509) & X509_CA) != X509_CA)
 	{
+		DBG1(DBG_CFG, "certificate in authority section lacks CA basic "
+			 "constraint, rejected");
 		cert->destroy(cert);
-		return create_reply("certificate without CA flag, rejected");
+		return FALSE;
 	}
+	DESTROY_IF(*cacert);
 	*cacert = cert;
 
 	return TRUE;
@@ -401,29 +311,29 @@ CALLBACK(parse_cacert, bool,
 CALLBACK(authority_kv, bool,
 	load_data_t *data, vici_message_t *message, char *name, chunk_t value)
 {
-	parse_rule_t rules[] = {
-		{ "cacert",			parse_cacert, &data->authority->cert			},
-		{ "file",			parse_string, &data->file						},
-		{ "handle",			parse_string, &data->handle						},
-		{ "slot",			parse_uint32, &data->slot						},
-		{ "module",			parse_string, &data->module						},
-		{ "cert_uri_base",	parse_string, &data->authority->cert_uri_base	},
+	vici_parse_rule_t rules[] = {
+		VICI_RULE_CUSTOM("cacert", &data->authority->cert, parse_cacert),
+		VICI_RULE_STRING("file", &data->file),
+		VICI_RULE_STRING("handle", &data->handle),
+		VICI_RULE_UINT32("slot", &data->slot),
+		VICI_RULE_STRING("module", &data->module),
+		VICI_RULE_STRING("cert_uri_base", &data->authority->cert_uri_base),
 	};
 
-	return parse_rules(rules, countof(rules), name, value,
-					   &data->request->reply);
+	return vici_parse_rules(rules, countof(rules), name, value,
+							&data->request->reply);
 }
 
 CALLBACK(authority_li, bool,
 	load_data_t *data, vici_message_t *message, char *name, chunk_t value)
 {
-	parse_rule_t rules[] = {
-		{ "crl_uris",	parse_uris, data->authority->crl_uris  },
-		{ "ocsp_uris",	parse_uris, data->authority->ocsp_uris },
+	vici_parse_rule_t rules[] = {
+		VICI_RULE_CUSTOM("crl_uris", data->authority->crl_uris, parse_uris),
+		VICI_RULE_CUSTOM("ocsp_uris", data->authority->ocsp_uris, parse_uris),
 	};
 
-	return parse_rules(rules, countof(rules), name, value,
-					   &data->request->reply);
+	return vici_parse_rules(rules, countof(rules), name, value,
+							&data->request->reply);
 }
 
 static void log_authority_data(authority_t *authority)
@@ -528,7 +438,7 @@ CALLBACK(authority_sn, bool,
 	}
 	if (!data->authority->cert)
 	{
-		request->reply = create_reply("CA certificate missing: %s", name);
+		request->reply = vici_create_reply("CA certificate missing: %s", name);
 		free_load_data(data);
 		return FALSE;
 	}
@@ -576,9 +486,9 @@ CALLBACK(load_authority, vici_message_t*,
 		{
 			return request.reply;
 		}
-		return create_reply("parsing request failed");
+		return vici_create_reply("parsing request failed");
 	}
-	return create_reply(NULL);
+	return vici_create_reply(NULL);
 }
 
 CALLBACK(unload_authority, vici_message_t*,
@@ -592,7 +502,7 @@ CALLBACK(unload_authority, vici_message_t*,
 	authority_name = message->get_str(message, NULL, "name");
 	if (!authority_name)
 	{
-		return create_reply("unload: missing authority name");
+		return vici_create_reply("unload: missing authority name");
 	}
 
 	this->lock->write_lock(this->lock);
@@ -613,10 +523,10 @@ CALLBACK(unload_authority, vici_message_t*,
 
 	if (!found)
 	{
-		return create_reply("unload: authority '%s' not found", authority_name);
+		return vici_create_reply("unload: authority '%s' not found", authority_name);
 	}
 	lib->credmgr->flush_cache(lib->credmgr, CERT_ANY);
-	return create_reply(NULL);
+	return vici_create_reply(NULL);
 }
 
 CALLBACK(get_authorities, vici_message_t*,

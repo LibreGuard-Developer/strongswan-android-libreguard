@@ -1,6 +1,6 @@
 AC_PREREQ([2.69])
 
-AC_INIT([NetworkManager-strongswan],[1.6.3],[info@strongswan.org],[NetworkManager-strongswan])
+AC_INIT([NetworkManager-strongswan],[1.6.6],[info@strongswan.org],[NetworkManager-strongswan])
 AM_INIT_AUTOMAKE([subdir-objects])
 AM_MAINTAINER_MODE
 
@@ -78,8 +78,6 @@ AC_ARG_WITH(
 AM_CONDITIONAL(WITH_GTK4, test "$with_gtk4" != no)
 
 PKG_CHECK_MODULES(LIBNM, libnm >= 1.1.0)
-LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MIN_REQUIRED=NM_VERSION_1_2"
-LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MAX_ALLOWED=NM_VERSION_1_2"
 PKG_CHECK_MODULES(LIBNMA, libnma >= 1.1.0)
 
 if test x"$with_gtk4" != xno; then

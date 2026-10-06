@@ -44,6 +44,17 @@ bool settings_parser_parse_file(section_t *root, char *name);
 bool settings_parser_parse_string(section_t *root, char *settings);
 
 /**
+ * Buffer size for complete key name/pattern when looking up settings.
+ */
+#define KEY_FULL_BUF_LEN 2048
+
+/**
+ * Buffer size for a single part of a key name (matches the maximum length
+ * for names in VICI).
+ */
+#define KEY_PART_BUF_LEN 257
+
+/**
  * Private data of settings
  */
 struct private_settings_t {
@@ -287,7 +298,7 @@ static void find_sections_buffered(private_settings_t *this, section_t *section,
 static section_t *ensure_section(private_settings_t *this, section_t *section,
 								 const char *key, va_list args)
 {
-	char buf[128], keybuf[512];
+	char buf[KEY_PART_BUF_LEN], keybuf[KEY_FULL_BUF_LEN];
 
 	if (snprintf(keybuf, sizeof(keybuf), "%s", key) >= sizeof(keybuf))
 	{
@@ -304,7 +315,7 @@ static section_t *ensure_section(private_settings_t *this, section_t *section,
 static array_t *find_sections(private_settings_t *this, section_t *section,
 							  char *key, va_list args, array_t **sections)
 {
-	char buf[128], keybuf[512];
+	char buf[KEY_PART_BUF_LEN], keybuf[KEY_FULL_BUF_LEN];
 
 	if (snprintf(keybuf, sizeof(keybuf), "%s", key) >= sizeof(keybuf))
 	{
@@ -476,7 +487,7 @@ static void remove_value_buffered(private_settings_t *this, section_t *section,
 void settings_remove_value(settings_t *settings, char *key, ...)
 {
 	private_settings_t *this = (private_settings_t*)settings;
-	char buf[128], keybuf[512];
+	char buf[KEY_PART_BUF_LEN], keybuf[KEY_FULL_BUF_LEN];
 	va_list args;
 
 	if (snprintf(keybuf, sizeof(keybuf), "%s", key) >= sizeof(keybuf))
@@ -499,7 +510,7 @@ void settings_remove_value(settings_t *settings, char *key, ...)
 static char *find_value(private_settings_t *this, section_t *section,
 						char *key, va_list args)
 {
-	char buf[128], keybuf[512], *value = NULL;
+	char buf[KEY_PART_BUF_LEN], keybuf[KEY_FULL_BUF_LEN], *value = NULL;
 	array_t *sections = NULL;
 	kv_t *kv;
 
@@ -525,7 +536,7 @@ static char *find_value(private_settings_t *this, section_t *section,
 static void set_value(private_settings_t *this, section_t *section,
 					  char *key, va_list args, char *value)
 {
-	char buf[128], keybuf[512];
+	char buf[KEY_PART_BUF_LEN], keybuf[KEY_FULL_BUF_LEN];
 	kv_t *kv;
 
 	if (snprintf(keybuf, sizeof(keybuf), "%s", key) >= sizeof(keybuf))
@@ -601,19 +612,17 @@ METHOD(settings_t, get_bool, bool,
  */
 inline int settings_value_as_int(char *value, int def)
 {
-	int intval;
+	int32_t intval;
 	char *end;
 	int base = 10;
 
 	if (value)
 	{
-		errno = 0;
-		if (value[0] == '0' && value[1] == 'x')
+		if (strcasepfx(value, "0x"))
 		{	/* manually detect 0x prefix as we want to avoid octal encoding */
 			base = 16;
 		}
-		intval = strtoul(value, &end, base);
-		if (errno == 0 && *end == 0 && end != value)
+		if (int32_from_string(value, &end, base, &intval) && !*end)
 		{
 			return intval;
 		}
@@ -644,13 +653,11 @@ inline uint64_t settings_value_as_uint64(char *value, uint64_t def)
 
 	if (value)
 	{
-		errno = 0;
-		if (value[0] == '0' && value[1] == 'x')
+		if (strcasepfx(value, "0x"))
 		{	/* manually detect 0x prefix as we want to avoid octal encoding */
 			base = 16;
 		}
-		intval = strtoull(value, &end, base);
-		if (errno == 0 && *end == 0 && end != value)
+		if (uint64_from_string(value, &end, base, &intval) && !*end)
 		{
 			return intval;
 		}
@@ -695,9 +702,9 @@ METHOD(settings_t, get_double, double,
  */
 inline uint32_t settings_value_as_time(char *value, uint32_t def)
 {
-	time_t val;
+	uint64_t val;
 
-	if (timespan_from_string(value, NULL, &val))
+	if (uint64_timespan_from_string(value, NULL, &val) && val <= UINT32_MAX)
 	{
 		return val;
 	}
@@ -939,7 +946,7 @@ METHOD(settings_t, add_fallback, void,
 {
 	section_t *section;
 	va_list args;
-	char buf[512];
+	char buf[KEY_FULL_BUF_LEN];
 
 	this->lock->write_lock(this->lock);
 	va_start(args, fallback);

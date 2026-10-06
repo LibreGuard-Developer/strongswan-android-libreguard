@@ -132,6 +132,10 @@ typedef struct {
 METHOD(enumerator_t, cert_destroy, void,
 	cert_enumerator_t *this)
 {
+	if (this->certs)
+	{
+		sk_X509_pop_free(this->certs, X509_free);
+	}
 	DESTROY_IF(this->cert);
 	free(this);
 }
@@ -222,8 +226,8 @@ static auth_cfg_t *verify_signature(CMS_SignerInfo *si,
 	auth_cfg_t *auth, *found = NULL;
 	identification_t *issuer, *serial;
 	chunk_t attrs = chunk_empty, sig, attr;
-	X509_NAME *name;
-	ASN1_INTEGER *snr;
+	X509_NAME *name = NULL;
+	ASN1_INTEGER *snr = NULL;
 	int i;
 
 	if (CMS_SignerInfo_get0_signer_id(si, NULL, &name, &snr) != 1)
@@ -283,7 +287,8 @@ static auth_cfg_t *verify_signature(CMS_SignerInfo *si,
  */
 static bool verify_digest(CMS_ContentInfo *cms, CMS_SignerInfo *si, int hash_oid)
 {
-	ASN1_OCTET_STRING *os, **osp;
+	const ASN1_OCTET_STRING *os;
+	ASN1_OCTET_STRING **osp;
 	hash_algorithm_t hash_alg;
 	chunk_t digest, content, hash;
 	hasher_t *hasher;
@@ -317,7 +322,7 @@ static bool verify_digest(CMS_ContentInfo *cms, CMS_SignerInfo *si, int hash_oid
 	}
 	hasher->destroy(hasher);
 
-	if (!chunk_equals_const(digest, hash))
+	if (!chunk_equals_const(hash, digest))
 	{
 		free(hash.ptr);
 		DBG1(DBG_LIB, "invalid messageDigest");
@@ -448,7 +453,7 @@ METHOD(pkcs7_t, get_attribute, bool,
 	signature_enumerator_t *e;
 	CMS_SignerInfo *si;
 	X509_ATTRIBUTE *attr;
-	ASN1_TYPE *type;
+	const ASN1_TYPE *type;
 	chunk_t chunk, wrapped;
 	int i;
 
@@ -468,7 +473,11 @@ METHOD(pkcs7_t, get_attribute, bool,
 		{
 			/* get first value in SET */
 			type = X509_ATTRIBUTE_get0_type(attr, 0);
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+			chunk = wrapped = openssl_i2chunk(ASN1_TYPE, (ASN1_TYPE*)type);
+#else
 			chunk = wrapped = openssl_i2chunk(ASN1_TYPE, type);
+#endif
 			if (asn1_unwrap(&chunk, &chunk) != 0x100 /* ASN1_INVALID */)
 			{
 				*value = chunk_clone(chunk);
@@ -628,8 +637,8 @@ static bool decrypt(private_openssl_pkcs7_t *this,
 			identification_t *serial, *issuer;
 			private_key_t *private;
 			X509_ALGOR *alg;
-			X509_NAME *name;
-			ASN1_INTEGER *sn;
+			X509_NAME *name = NULL;
+			ASN1_INTEGER *sn = NULL;
 			u_char zero = 0;
 			int oid;
 

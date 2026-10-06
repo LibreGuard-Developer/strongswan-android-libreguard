@@ -329,7 +329,7 @@ static int list_conns(vici_conn_t *conn)
 	vici_req_t *req;
 	vici_res_t *res;
 	command_format_options_t format = COMMAND_FORMAT_NONE;
-	char *arg;
+	char *arg, *ike = NULL;
 	int ret;
 
 	while (TRUE)
@@ -338,6 +338,9 @@ static int list_conns(vici_conn_t *conn)
 		{
 			case 'h':
 				return command_usage(NULL);
+			case 'i':
+				ike = arg;
+				continue;
 			case 'P':
 				format |= COMMAND_FORMAT_PRETTY;
 				/* fall through to raw */
@@ -359,6 +362,10 @@ static int list_conns(vici_conn_t *conn)
 		return ret;
 	}
 	req = vici_begin("list-conns");
+	if (ike)
+	{
+		vici_add_key_valuef(req, "ike", "%s", ike);
+	}
 	res = vici_submit(req, conn);
 	if (!res)
 	{
@@ -382,9 +389,10 @@ static void __attribute__ ((constructor))reg()
 {
 	command_register((command_t) {
 		list_conns, 'L', "list-conns", "list loaded configurations",
-		{"[--raw|--pretty]"},
+		{"[--ike <name>] [--raw|--pretty]"},
 		{
 			{"help",		'h', 0, "show usage information"},
+			{"ike",			'i', 1, "filter connections by name"},
 			{"raw",			'r', 0, "dump raw response message"},
 			{"pretty",		'P', 0, "dump raw response message in pretty print"},
 		}

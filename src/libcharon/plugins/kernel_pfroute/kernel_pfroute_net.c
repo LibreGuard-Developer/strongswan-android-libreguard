@@ -538,11 +538,10 @@ static void addr_map_entry_add(private_kernel_pfroute_net_t *this,
 }
 
 /**
- * Remove an address map entry (the argument order is a bit strange because
- * it is also used with linked_list_t.invoke_function)
+ * Remove an address map entry
  */
-static void addr_map_entry_remove(addr_entry_t *addr, iface_entry_t *iface,
-								  private_kernel_pfroute_net_t *this)
+static void addr_map_entry_remove(private_kernel_pfroute_net_t *this,
+								  addr_entry_t *addr, iface_entry_t *iface)
 {
 	addr_map_entry_t *entry, lookup = {
 		.ip = addr->ip,
@@ -732,7 +731,7 @@ static void process_addr(private_kernel_pfroute_net_t *this,
 							DBG1(DBG_KNL, "%H disappeared from %s",
 								 host, iface->ifname);
 						}
-						addr_map_entry_remove(addr, iface, this);
+						addr_map_entry_remove(this, addr, iface);
 						addr_entry_destroy(addr);
 					}
 				}
@@ -851,7 +850,7 @@ static void repopulate_iface(private_kernel_pfroute_net_t *this,
 
 	while (addrs->remove_last(addrs, (void**)&addr) == SUCCESS)
 	{
-		addr_map_entry_remove(addr, iface, this);
+		addr_map_entry_remove(this, addr, iface);
 		addr_entry_destroy(addr);
 	}
 	addrs->destroy(addrs);
@@ -955,6 +954,7 @@ static void process_announce(private_kernel_pfroute_net_t *this,
 {
 	enumerator_t *enumerator;
 	iface_entry_t *iface;
+	addr_entry_t *addr;
 
 	if (msg->ifan_what != IFAN_DEPARTURE)
 	{
@@ -970,6 +970,12 @@ static void process_announce(private_kernel_pfroute_net_t *this,
 		{
 			DBG1(DBG_KNL, "interface %s disappeared", iface->ifname);
 			this->ifaces->remove_at(this->ifaces, enumerator);
+			while (iface->addrs->remove_last(iface->addrs,
+											 (void**)&addr) == SUCCESS)
+			{
+				addr_map_entry_remove(this, addr, iface);
+				addr_entry_destroy(addr);
+			}
 			iface_entry_destroy(iface);
 			break;
 		}
@@ -1116,8 +1122,7 @@ CALLBACK(filter_addresses, bool,
 	address_enumerator_t *data, enumerator_t *orig, va_list args)
 {
 	addr_entry_t *addr;
-	host_t *ip, **out;
-	struct sockaddr_in6 *sin6;
+	host_t **out;
 
 	VA_ARGS_VGET(args, out);
 
@@ -1131,16 +1136,11 @@ CALLBACK(filter_addresses, bool,
 		{	/* address is regular, but not requested */
 			continue;
 		}
-		ip = addr->ip;
-		if (ip->get_family(ip) == AF_INET6)
-		{
-			sin6 = (struct sockaddr_in6 *)ip->get_sockaddr(ip);
-			if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr))
-			{   /* skip addresses with a unusable scope */
-				continue;
-			}
+		if (host_is_loopback(addr->ip) || host_is_linklocal(addr->ip))
+		{	/* skip loopback and link-local addresses */
+			continue;
 		}
-		*out = ip;
+		*out = addr->ip;
 		return TRUE;
 	}
 	return FALSE;
@@ -1167,10 +1167,6 @@ CALLBACK(filter_interfaces, bool,
 	{
 		if (!(data->which & ADDR_TYPE_IGNORED) && !iface->usable)
 		{	/* skip interfaces excluded by config */
-			continue;
-		}
-		if (!(data->which & ADDR_TYPE_LOOPBACK) && (iface->flags & IFF_LOOPBACK))
-		{	/* ignore loopback devices */
 			continue;
 		}
 		if (!(data->which & ADDR_TYPE_DOWN) && !(iface->flags & IFF_UP))

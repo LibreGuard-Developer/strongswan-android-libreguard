@@ -274,7 +274,7 @@ METHOD(enumerator_t, enumerate, bool,
 		hasher->destroy(hasher);
 		DBG3(DBG_LIB, "hash: %B", &hash);
 
-		valid = chunk_equals_const(chunk, hash);
+		valid = chunk_equals_const(hash, chunk);
 		free(hash.ptr);
 		if (!valid)
 		{
@@ -486,7 +486,7 @@ static bool parse(private_pkcs7_signed_data_t *this, chunk_t content)
 				break;
 		}
 	}
-	success = parser->success(parser);
+	success = parser->success(parser) && this->content;
 	parser->destroy(parser);
 
 	return success;

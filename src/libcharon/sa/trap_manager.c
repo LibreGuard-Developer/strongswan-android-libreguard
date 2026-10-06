@@ -219,7 +219,7 @@ static status_t install_trap(child_sa_t *child_sa, linked_list_t *local,
 
 	/* we don't know the finally negotiated protocol (ESP|AH), we install
 	 * the SA with the protocol of the first proposal */
-	proposals = child->get_proposals(child, TRUE);
+	proposals = child->get_proposals(child, TRUE, FALSE);
 	if (proposals->get_first(proposals, (void**)&proposal) == SUCCESS)
 	{
 		proto = proposal->get_protocol(proposal);
@@ -384,7 +384,7 @@ METHOD(trap_manager_t, install, bool,
 	this->lock->write_lock(this->lock);
 	/* do this at the end, so entries created temporarily are also destroyed */
 	this->installing--;
-	this->condvar->signal(this->condvar);
+	this->condvar->broadcast(this->condvar);
 	this->lock->unlock(this->lock);
 	return result;
 }
@@ -398,6 +398,11 @@ METHOD(trap_manager_t, uninstall, bool,
 	this->lock->write_lock(this->lock);
 	while (this->installing)
 	{
+		if (this->installing == INSTALL_DISABLED)
+		{	/* flush() has been called, policy is already uninstalled */
+			this->lock->unlock(this->lock);
+			return TRUE;
+		}
 		this->condvar->wait(this->condvar, this->lock);
 	}
 	enumerator = this->traps->create_enumerator(this->traps);
@@ -557,6 +562,14 @@ METHOD(trap_manager_t, acquire, void,
 	}
 	wildcard = found->wildcard;
 
+	if (wildcard && (!data->dst || !data->src))
+	{
+		DBG1(DBG_CFG, "unable to process acquire without selectors for "
+			 "trap without destination address (reqid %u)", reqid);
+		this->lock->unlock(this->lock);
+		return;
+	}
+
 	this->mutex->lock(this->mutex);
 	if (wildcard)
 	{
@@ -579,12 +592,12 @@ METHOD(trap_manager_t, acquire, void,
 	}
 	if (!acquire)
 	{
+		seq = data->seq = data->seq ?: ref_get_nonzero(&this->acquire_seq);
 		INIT(acquire,
 			.dst = host,
 			.reqid = reqid,
 			.data = kernel_acquire_data_clone(data),
 		);
-		seq = data->seq = data->seq ?: ref_get_nonzero(&this->acquire_seq);
 		this->acquires->insert_last(this->acquires, acquire);
 	}
 	else if (data->seq && data->seq != acquire->data->seq)
@@ -842,6 +855,11 @@ METHOD(trap_manager_t, flush, void,
 	private_trap_manager_t *this)
 {
 	this->lock->write_lock(this->lock);
+	if (this->installing == INSTALL_DISABLED)
+	{
+		this->lock->unlock(this->lock);
+		return;
+	}
 	while (this->installing)
 	{
 		this->condvar->wait(this->condvar, this->lock);
