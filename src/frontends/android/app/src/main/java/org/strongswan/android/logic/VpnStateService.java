@@ -81,6 +81,8 @@ public class VpnStateService extends Service
 		GENERIC_ERROR,
 		PASSWORD_MISSING,
 		CERTIFICATE_UNAVAILABLE,
+		VPN_PERMISSION_REQUIRED,
+		VPN_PERMISSION_REVOKED,
 	}
 
 	/**
@@ -451,11 +453,16 @@ public class VpnStateService extends Service
 			{
 				if (VpnStateService.this.mError != error)
 				{
+					if ((mError == ErrorState.VPN_PERMISSION_REQUIRED || mError == ErrorState.VPN_PERMISSION_REVOKED)
+						&& error != ErrorState.NO_ERROR && error != ErrorState.VPN_PERMISSION_REQUIRED && error != ErrorState.VPN_PERMISSION_REVOKED)
+					{
+						return false;
+					}
 					if (VpnStateService.this.mError == ErrorState.NO_ERROR)
 					{
 						setRetryTimer(error);
 					}
-					else if (error == ErrorState.NO_ERROR)
+					else if (error == ErrorState.NO_ERROR || error == ErrorState.VPN_PERMISSION_REQUIRED || error == ErrorState.VPN_PERMISSION_REVOKED)
 					{
 						resetRetryTimer();
 					}
@@ -602,6 +609,9 @@ public class VpnStateService extends Service
 					return 5000;
 				case UNREACHABLE:
 					return 5000;
+				case VPN_PERMISSION_REQUIRED:
+				case VPN_PERMISSION_REVOKED:
+					return 0;
 				case PASSWORD_MISSING:
 					/* this needs user intervention (entering the password) */
 					return 0;

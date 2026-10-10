@@ -226,9 +226,15 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 
 	@Override
 	public void onRevoke()
-	{	/* the system revoked the rights grated with the initial prepare() call.
-		 * called when the user clicks disconnect in the system's VPN dialog */
-		setNextProfile(null);
+	{
+		handlePermissionLoss(ErrorState.VPN_PERMISSION_REVOKED);
+	}
+
+	private void handlePermissionLoss(ErrorState error)
+	{
+		setError(error);
+		/* Release any Builder lock before the connection thread tears down the tunnel. */
+		mHandler.post(() -> setNextProfile(null));
 	}
 
 	@Override
@@ -1012,6 +1018,8 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 			}
 			if (fd == null)
 			{
+				handlePermissionLoss(ErrorState.VPN_PERMISSION_REQUIRED);
+				closeBlocking();
 				return null;
 			}
 			/* now that the TUN device is created we don't need the current
@@ -1073,6 +1081,8 @@ public class CharonVpnService extends VpnService implements Runnable, VpnStateSe
 			}
 			if (fd == null)
 			{
+				handlePermissionLoss(ErrorState.VPN_PERMISSION_REQUIRED);
+				closeBlocking();
 				return -1;
 			}
 			return fd.detachFd();

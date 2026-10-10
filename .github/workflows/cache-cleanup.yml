@@ -4,12 +4,15 @@ on: delete
 
 jobs:
   cleanup:
+    if: github.event.ref_type == 'branch'
     runs-on: ubuntu-slim
     permissions:
       actions: write
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          DELETED_BRANCH: ${{ github.event.ref }}
         # github.ref for deletes is the default branch, so we get the ref from
         # the event, which is not the full ref
-        run: gh cache delete --repo ${{ github.repository }} -r refs/heads/${{ github.event.ref }} --all --succeed-on-no-caches
+        run: gh cache delete --repo "$GH_REPOSITORY" -r "refs/heads/$DELETED_BRANCH" --all --succeed-on-no-caches
